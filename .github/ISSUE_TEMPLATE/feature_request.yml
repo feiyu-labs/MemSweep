@@ -1,0 +1,8 @@
+name: Feature request
+description: 功能建议
+labels: [enhancement]
+body:
+  - type: textarea
+    id: scene
+    attributes: { label: 使用场景, description: 你想解决什么问题？注意本项目遵循减法约束，新设置项需要强场景支撑 }
+    validations: { required: true }

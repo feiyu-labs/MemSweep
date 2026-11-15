@@ -1,0 +1,22 @@
+name: Bug report
+description: 报告 Bug
+labels: [bug]
+body:
+  - type: textarea
+    id: what
+    attributes: { label: 发生了什么, description: 现象 + 复现步骤 }
+    validations: { required: true }
+  - type: input
+    id: version
+    attributes: { label: MemSweep 版本, placeholder: "v1.9.0" }
+    validations: { required: true }
+  - type: input
+    id: win
+    attributes: { label: Windows 版本, placeholder: "Win11 26H2 26300" }
+    validations: { required: true }
+  - type: textarea
+    id: log
+    attributes: { label: 日志最后 50 行, description: "%APPDATA%\MemSweep\log.txt" }
+  - type: textarea
+    id: shot
+    attributes: { label: 截图, description: 任务管理器“性能→内存”页（如与内存相关） }

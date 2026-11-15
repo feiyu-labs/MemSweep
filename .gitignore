@@ -1,0 +1,14 @@
+# build output
+dist/
+obj/
+*.sha256
+
+# local artifacts
+nul
+*.log
+Thumbs.db
+
+# IDE
+.vs/
+.vscode/
+.idea/

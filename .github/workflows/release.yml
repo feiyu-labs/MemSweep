@@ -1,0 +1,48 @@
+name: Release
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install zig 0.17.1
+        shell: pwsh
+        run: |
+          $url = 'https://ziglang.org/download/0.17.1/zig-x86_64-windows-0.17.1.zip'
+          Invoke-WebRequest -Uri $url -OutFile zig.zip
+          Expand-Archive zig.zip -DestinationPath zig-sdk
+          "ZIG=$env:GITHUB_WORKSPACE\zig-sdk\zig-x86_64-windows-0.17.1\zig.exe" >> $env:GITHUB_ENV
+
+      - name: Build x64 + ARM64
+        shell: cmd
+        run: |
+          build.cmd release
+          build.cmd arm64
+
+      - name: Package
+        shell: pwsh
+        run: |
+          $tag = "${{ github.ref_name }}"
+          $pairs = @{
+            "MemSweep-$tag-x64.zip"   = "dist/MemSweep.exe"
+            "MemSweep-$tag-arm64.zip" = "dist/MemSweep-arm64.exe"
+          }
+          foreach ($zip in $pairs.Keys) {
+            Compress-Archive -Path $pairs[$zip], LICENSE, README.md -DestinationPath $zip
+            $h = (Get-FileHash $zip -Algorithm SHA256).Hash
+            "$h  $zip" | Out-File "$zip.sha256" -Encoding ascii
+          }
+
+      - name: Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: pwsh
+        run: |
+          gh release create "$env:GITHUB_REF_NAME" MemSweep-*.zip MemSweep-*.zip.sha256 --generate-notes --title "MemSweep $env:GITHUB_REF_NAME"

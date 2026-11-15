@@ -1,0 +1,26 @@
+name: CI
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install zig 0.17.1
+        shell: pwsh
+        run: |
+          $url = 'https://ziglang.org/download/0.17.1/zig-x86_64-windows-0.17.1.zip'
+          Invoke-WebRequest -Uri $url -OutFile zig.zip
+          Expand-Archive zig.zip -DestinationPath zig-sdk
+          "ZIG=$env:GITHUB_WORKSPACE\zig-sdk\zig-x86_64-windows-0.17.1\zig.exe" >> $env:GITHUB_ENV
+
+      - name: Build + self tests
+        shell: cmd
+        run: build.cmd test
