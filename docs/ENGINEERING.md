@@ -120,6 +120,9 @@ build.cmd test     :: dev + /selftest + /idlecheck + /uipng + /checkpng
 - **标题栏图标规范**：统一 1.5px 圆头描边、16px 光学尺寸、30×30 悬停面；idle `T.text2`、
   hover `T.text`。主题/语言都显示“点击后”的状态（浅色→月亮、深色→太阳；中文→EN、英文→中），
   两个快切按钮不得一个显示当前、一个显示目标。只有窗口关闭按钮使用 danger 悬停色。
+- **品牌标记单一来源**：`DrawBrandMark`（256 网格、squircle r56、M 圆头折线 stroke 36）同时服务
+  标题栏/关于页；`res/icon.ico` 的生成脚本必须使用同一组坐标与颜色。改标记必须同步两处，
+  并重新生成九个尺寸（16–256）——不要只放一张 256 PNG 让系统缩放。
 
 ## 5.1 线程模型
 

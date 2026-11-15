@@ -161,14 +161,15 @@ enum CtlId {
     ID_SL_THRESH,
     ID_SEG_ZH, ID_SEG_EN, ID_SEG_THEME0, ID_SEG_THEME1, ID_SEG_THEME2,
     ID_SYS_MC, ID_SYS_PC, ID_SYS_PF, ID_SYS_WSL, ID_SYS_EXPORT, ID_SYS_MORE,
-    ID_SET_ADVANCED, ID_ADV_BACK,
+    ID_SET_ADVANCED, ID_ADV_BACK, ID_SET_ABOUT,
+    ID_ABOUT_REPO, ID_ABOUT_ISSUES, ID_ABOUT_UPDATES,
     ID_TOP5_BASE = 2400,
     ID_ED_WL = 2500,
     ID_SET_COOL_BASE = 2510, ID_SET_STRENGTH_BASE = 2520,
     ID_ADV_MINWS_BASE = 2530, ID_ADV_IDLE_BASE = 2540
 };
 enum CtlKind { K_NONE, K_BUTTON, K_TOGGLE, K_SLIDER, K_SEG, K_EDIT, K_TITLEBTN };
-enum class Sheet { None, Settings, Advanced, Processes, System };
+enum class Sheet { None, Settings, Advanced, Processes, System, About };
 
 struct Hit { CtlId id; CtlKind kind; RectF r; };
 
@@ -279,7 +280,10 @@ struct Layout {
     RectF setAutoRow, setThreshLbl, setThresh, setThreshVal;
     RectF setCoolLbl, setCoolSeg[4], setStrengthLbl, setStrengthSeg[3], setStrengthHint;
     RectF setWlLbl, setWlEdit, setWlHint, setAutostartRow, setSilentRow;
-    RectF setThemeLbl, setThemeSeg[3], setLangLbl, setLangSeg[2], setAdvancedRow;
+    RectF setThemeLbl, setThemeSeg[3], setLangLbl, setLangSeg[2], setAdvancedRow, setAboutLink;
+
+    // 关于
+    RectF aboutLogo, aboutTitle, aboutVer, aboutDesc, aboutRows[3], aboutFoot;
 
     // 高级
     RectF advMinLbl, advMinSeg[3], advIdleLbl, advIdleSeg[3];
@@ -314,6 +318,7 @@ static void BuildLayout(float w, float h, float dpi) {
     if (g_sheet == Sheet::Advanced) sh = 380;
     else if (g_sheet == Sheet::Processes) sh = 340;
     else if (g_sheet == Sheet::System) sh = g_systemExpanded ? 520 : 360;
+    else if (g_sheet == Sheet::About) sh = 360;
     L.sheet = RectF(16, (L.h - sh) / 2, L.w - 32, sh);
     L.sheetHeader = RectF(L.sheet.X, L.sheet.Y, L.sheet.Width, 52);
     L.sheetTitle = RectF(L.sheet.X + 24, L.sheet.Y + 12, 260, 28);
@@ -400,7 +405,9 @@ static void BuildLayout(float w, float h, float dpi) {
             L.setLangSeg[i] = RectF(lx + i * (lw + 6), 496, lw, 28);
             AddHit(i == 0 ? ID_SEG_ZH : ID_SEG_EN, K_SEG, L.setLangSeg[i]);
         }
-        L.setAdvancedRow = RectF(bx, 536, bw, 34); AddHit(ID_SET_ADVANCED, K_BUTTON, L.setAdvancedRow);
+        L.setAboutLink = RectF(bx, 536, 150, 34); AddHit(ID_SET_ABOUT, K_BUTTON, L.setAboutLink);
+        L.setAdvancedRow = RectF(bx + 158, 536, bw - 158, 34);
+        AddHit(ID_SET_ADVANCED, K_BUTTON, L.setAdvancedRow);
         return;
     }
 
@@ -422,6 +429,20 @@ static void BuildLayout(float w, float h, float dpi) {
         L.advHotkeyRow = RectF(bx, sy + 196, bw, 36); AddHit(ID_TG_HOTKEY, K_TOGGLE, L.advHotkeyRow);
         L.advEcoRow = RectF(bx, sy + 244, bw, 36); AddHit(ID_TG_ECO, K_TOGGLE, L.advEcoRow);
         L.advIdleDeepRow = RectF(bx, sy + 292, bw, 42); AddHit(ID_TG_IDLE_DEEP, K_TOGGLE, L.advIdleDeepRow);
+        return;
+    }
+
+    if (g_sheet == Sheet::About) {
+        const float sy = L.sheet.Y;
+        L.aboutLogo = RectF((L.w - 56) / 2, sy + 40, 56, 56);
+        L.aboutTitle = RectF(bx, sy + 106, bw, 30);
+        L.aboutVer = RectF(bx, sy + 136, bw, 16);
+        L.aboutDesc = RectF(bx, sy + 158, bw, 18);
+        for (int i = 0; i < 3; i++) {
+            L.aboutRows[i] = RectF(bx, sy + 192 + i * 38, bw, 34);
+            AddHit((CtlId)(ID_ABOUT_REPO + i), K_BUTTON, L.aboutRows[i]);
+        }
+        L.aboutFoot = RectF(bx, sy + 318, bw, 16);
         return;
     }
 
@@ -905,28 +926,33 @@ static void DrawIconButton(Graphics& g, const RectF& r, int id, bool close, bool
     }
 }
 
+// 品牌标记：与 res/icon.ico 同一套几何（256 网格、圆角 squircle、白色 M）。
+// 图标生成脚本使用同样的坐标，改这里必须同步改小尺寸图标。
+static void DrawBrandMark(Graphics& g, const RectF& box) {
+    const float k = box.Width / 256.0f;
+    GraphicsState st = g.Save();
+    g.TranslateTransform(box.X, box.Y);
+    g.ScaleTransform(k, k);
+    GraphicsPath sq;
+    AddRound(sq, RectF(4, 4, 248, 248), 56);
+    LinearGradientBrush br(RectF(4, 4, 248, 248), C(255, 52, 211, 153), C(255, 4, 120, 87),
+                          LinearGradientModeForwardDiagonal);
+    g.FillPath(&br, &sq);
+    Pen hl(C(28, 255, 255, 255), 1.5f);
+    g.DrawPath(&hl, &sq);
+    // M：圆头折线，和 UI 的圆角语言一致
+    Pen mp(C(255, 255, 255, 255), 36.0f);
+    mp.SetLineJoin(LineJoinRound);
+    mp.SetStartCap(LineCapRound);
+    mp.SetEndCap(LineCapRound);
+    PointF pts[5] = { PointF(60, 194), PointF(60, 72), PointF(128, 146),
+                      PointF(196, 72), PointF(196, 194) };
+    g.DrawLines(&mp, pts, 5);
+    g.Restore(st);
+}
+
 static void DrawChrome(Graphics& g) {
-    // 品牌图标：绿色 squircle + 白色清理环，和主仪表盘同一视觉语言
-    FillRound(g, RectF(L.logo.X, L.logo.Y + 1, L.logo.Width, L.logo.Height), 8, C(22, 0, 0, 0));
-    FillRoundGrad(g, L.logo, 8, T.accent, T.accent2);
-    {
-        float cx = L.logo.X + L.logo.Width / 2, cy = L.logo.Y + L.logo.Height / 2;
-        RectF body(cx - 6, cy - 6, 12, 12);
-        Pen mp(C(248, 255, 255, 255), 1.6f);
-        GraphicsPath chip;
-        AddRound(chip, body, 2.5f);
-        g.DrawPath(&mp, &chip);
-        mp.SetWidth(1.4f);
-        for (int i = -1; i <= 1; i++) {
-            float off = i * 3.2f;
-            g.DrawLine(&mp, cx - 9, cy + off, cx - 6.6f, cy + off);
-            g.DrawLine(&mp, cx + 6.6f, cy + off, cx + 9, cy + off);
-            g.DrawLine(&mp, cx + off, cy - 9, cx + off, cy - 6.6f);
-            g.DrawLine(&mp, cx + off, cy + 6.6f, cx + off, cy + 9);
-        }
-        SolidBrush die(C(235, 255, 255, 255));
-        g.FillEllipse(&die, RectF(cx - 1.5f, cy - 1.5f, 3, 3));
-    }
+    DrawBrandMark(g, L.logo);
     TextAt(g, L"MemSweep", RectF(L.logo.GetRight() + 10, 8, 240, 28), f15b, T.text);
     DrawIconButton(g, L.btnLang, ID_BTN_LANG, false, false);
     DrawIconButton(g, L.btnTheme, ID_BTN_THEME, false, false);
@@ -1261,11 +1287,17 @@ static void DrawSettingsSheet(Graphics& g) {
     const wchar_t* langEn[2] = { L"中文", L"EN" };
     DrawSeg(g, L.setLangSeg, langZh, langEn, 2, g_zh ? 0 : 1);
 
+    bool aboutHover = g_hover == ID_SET_ABOUT;
+    FillRound(g, L.setAboutLink, 8, aboutHover ? T.trackFill : C(0, 0, 0, 0));
+    TextAt(g, Tx(L"关于 MemSweep", L"About MemSweep"), RectF(L.setAboutLink.X + 8,
+           L.setAboutLink.Y, L.setAboutLink.Width - 8, L.setAboutLink.Height), f12,
+           aboutHover ? T.accent : T.text2);
     bool advHover = g_hover == ID_SET_ADVANCED;
     FillRound(g, L.setAdvancedRow, 8, advHover ? T.trackFill : C(0, 0, 0, 0));
     TextAt(g, Tx(L"高级设置", L"Advanced"), RectF(L.setAdvancedRow.X, L.setAdvancedRow.Y,
-           L.setAdvancedRow.Width - 30, L.setAdvancedRow.Height), f12, T.text2);
-    TextAt(g, L"›", RectF(L.setAdvancedRow.GetRight() - 28, L.setAdvancedRow.Y, 20,
+           L.setAdvancedRow.Width - 26, L.setAdvancedRow.Height), f12,
+           advHover ? T.accent : T.text2, StringAlignmentFar);
+    TextAt(g, L"›", RectF(L.setAdvancedRow.GetRight() - 22, L.setAdvancedRow.Y, 16,
            L.setAdvancedRow.Height), f15b, T.text3, StringAlignmentFar);
 }
 
@@ -1294,6 +1326,38 @@ static void DrawAdvancedSheet(Graphics& g) {
     }
     DrawSwitchRow(g, L.advIdleDeepRow, L"离开时自动清理", L"Clean when away", s_idleDeep,
                   ToggleValue(ID_TG_IDLE_DEEP, s_idleDeep), idleSubZh, idleSubEn);
+}
+
+static void DrawAboutSheet(Graphics& g) {
+    DrawSheetFrame(g, L"关于", L"About", false);
+    DrawBrandMark(g, L.aboutLogo);
+    TextAt(g, L"MemSweep", L.aboutTitle, f20b, T.text, StringAlignmentCenter);
+#ifdef _WIN64
+    const wchar_t* arch = L"x64";
+#else
+    const wchar_t* arch = L"x86";
+#endif
+    wchar_t ver[64];
+    swprintf(ver, 64, L"v%s · %s", MEMSWEEP_VERSION, arch);
+    TextAt(g, ver, L.aboutVer, f11, T.text3, StringAlignmentCenter);
+    TextAt(g, Tx(L"轻量、克制的 Windows 内存清理工具",
+                 L"A lightweight, restrained Windows memory cleaner"),
+           L.aboutDesc, f12, T.text2, StringAlignmentCenter);
+
+    const wchar_t* rowZh[3] = { L"GitHub 仓库", L"问题反馈", L"检查更新" };
+    const wchar_t* rowEn[3] = { L"GitHub repository", L"Report an issue", L"Check for updates" };
+    for (int i = 0; i < 3; i++) {
+        bool hv = g_hover == (int)(ID_ABOUT_REPO + i);
+        if (hv) FillRound(g, L.aboutRows[i], 8, T.trackFill);
+        TextAt(g, Tx(rowZh[i], rowEn[i]), RectF(L.aboutRows[i].X + 12, L.aboutRows[i].Y,
+               L.aboutRows[i].Width - 40, L.aboutRows[i].Height), f12,
+               hv ? T.accent : T.text);
+        TextAt(g, L"›", RectF(L.aboutRows[i].GetRight() - 26, L.aboutRows[i].Y, 16,
+               L.aboutRows[i].Height), f15b, T.text3, StringAlignmentFar);
+    }
+    TextAt(g, Tx(L"MIT License · 不联网 · 不收集数据 · © 2026 feiyu-labs",
+                 L"MIT License · no network · no telemetry · © 2026 feiyu-labs"),
+           L.aboutFoot, f11, T.text3, StringAlignmentCenter);
 }
 
 static void DrawProcessSheet(Graphics& g) {
@@ -1375,6 +1439,7 @@ static void DrawAll(Graphics& g, const RectF* clip) {
         if (g_sheet == Sheet::Settings) DrawSettingsSheet(g);
         else if (g_sheet == Sheet::Advanced) DrawAdvancedSheet(g);
         else if (g_sheet == Sheet::Processes) DrawProcessSheet(g);
+        else if (g_sheet == Sheet::About) DrawAboutSheet(g);
         else DrawSystemSheet(g);
         g.Restore(st);
     }
@@ -1640,6 +1705,21 @@ static void Activate(CtlId id) {
         CommitSettings();
         OpenSheet(Sheet::Advanced);
         break;
+    case ID_SET_ABOUT:
+        OpenSheet(Sheet::About);
+        break;
+    case ID_ABOUT_REPO:
+        ShellExecuteW(nullptr, L"open", L"https://github.com/feiyu-labs/MemSweep",
+                      nullptr, nullptr, SW_SHOWNORMAL);
+        break;
+    case ID_ABOUT_ISSUES:
+        ShellExecuteW(nullptr, L"open", L"https://github.com/feiyu-labs/MemSweep/issues",
+                      nullptr, nullptr, SW_SHOWNORMAL);
+        break;
+    case ID_ABOUT_UPDATES:
+        ShellExecuteW(nullptr, L"open", L"https://github.com/feiyu-labs/MemSweep/releases/latest",
+                      nullptr, nullptr, SW_SHOWNORMAL);
+        break;
     case ID_ADV_BACK:
         CommitSettings();
         OpenSheet(Sheet::Settings);
@@ -1846,6 +1926,7 @@ static void ShowTrayMenu(int x, int y) {
                              : Tx(L"暂停自动清理 1 小时", L"Pause auto clean 1h"));
     AppendMenuW(m, MF_STRING, 9, Tx(L"深度清理（合并内存页）…", L"Deep clean (merge pages)…"));
     AppendMenuW(m, MF_SEPARATOR, 0, nullptr);
+    AppendMenuW(m, MF_STRING, 10, Tx(L"关于 MemSweep…", L"About MemSweep…"));
     AppendMenuW(m, MF_STRING, 6, Tx(L"退出", L"Exit"));
     SetMenuDefaultItem(m, 1, FALSE);
     SetForegroundWindow(g_hwnd);
@@ -1861,6 +1942,7 @@ static void ShowTrayMenu(int x, int y) {
     case 5: ShellExecuteW(nullptr, L"open", LogPath().c_str(), nullptr, nullptr, SW_SHOWNORMAL); break;
     case 6: PostMessageW(g_hwnd, WM_APP_EXIT, 0, 0); break;
     case 7: ShowSystemCheck(); break;
+    case 10: BringMainToFront(); OpenSheet(Sheet::About); break;
     case 9: StartCombine(true); break;
     case 8: PauseAutoGuard(AutoPaused() ? 0 : 60);
             g_toast = AutoPaused() ? Tx(L"自动清理已暂停 1 小时", L"Auto clean paused 1h")
@@ -2593,7 +2675,7 @@ static void ExportDiagnostics() {
     std::wstring out;
     wchar_t line[1024];
     swprintf(line, 1024,
-             L"MemSweep v1.9.5 diagnostics\r\nTime: %04d-%02d-%02d %02d:%02d:%02d\r\n\r\n",
+             L"MemSweep v" MEMSWEEP_VERSION L" diagnostics\r\nTime: %04d-%02d-%02d %02d:%02d:%02d\r\n\r\n",
              t.wYear, t.wMonth, t.wDay, t.wHour, t.wMinute, t.wSecond);
     out += line;
     Metrics m;
@@ -2948,6 +3030,7 @@ int RenderUISnapshot(const std::wstring& path) {
             if (_wcsicmp(env, L"settings") == 0) g_sheet = Sheet::Settings;
             else if (_wcsicmp(env, L"advanced") == 0) g_sheet = Sheet::Advanced;
             else if (_wcsicmp(env, L"processes") == 0) g_sheet = Sheet::Processes;
+            else if (_wcsicmp(env, L"about") == 0) g_sheet = Sheet::About;
         }
     }
     g_sheetAnimating = false;
@@ -2988,7 +3071,7 @@ int RenderUISnapshot(const std::wstring& path) {
 }
 
 int RunUI(HINSTANCE hInst, bool showOnStart) {
-    Log(L"UI start (v1.9.5, admin=%d)", (int)IsElevated());
+    Log(L"UI start (v" MEMSWEEP_VERSION L", admin=%d)", (int)IsElevated());
     InitGdiplus();
     InitThemeFromConfig();
     CreateFonts();
