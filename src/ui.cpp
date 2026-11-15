@@ -321,23 +321,26 @@ static void BuildLayout(float w, float h, float dpi) {
     L.sheetBody = RectF(L.sheet.X + 24, L.sheet.Y + 62, L.sheet.Width - 48, L.sheet.Height - 82);
     const float bx = L.sheetBody.X, bw = L.sheetBody.Width;
 
+    // 首页几何始终赋值：Sheet 打开时也要有有效矩形。
+    // v1.9.3 只在无 Sheet 时赋值，DrawHome 仍会执行，未初始化的 RectF
+    // 把首页元素画到随机位置——这就是“遮罩后元素偏移”的根因。
+    L.statusTitle = RectF(32, 72, L.w - 64, 28);
+    L.statusSub = RectF(32, 102, L.w - 64, 18);
+    L.gaugeCenter = RectF((L.w - 160) / 2, 132, 160, 160);
+    L.usedLine = RectF(32, 300, L.w - 64, 18);
+    L.metaLine = RectF(32, 322, L.w - 64, 18);
+    L.btnClean = RectF(32, 356, L.w - 64, 52);
+    L.autoRow = RectF(32, 432, L.w - 64, 42);
+    L.lastClean = RectF(32, 484, L.w - 64, 18);
+    L.linkProcess = RectF(32, 524, 220, 24);
+    L.linkSystem = RectF(L.w - 252, 524, 220, 24);
+
     if (g_sheet == Sheet::None) {
         AddHit(ID_BTN_SETTINGS, K_TITLEBTN, L.btnSettings);
         AddHit(ID_BTN_MIN, K_TITLEBTN, L.btnMin);
         AddHit(ID_BTN_CLOSE, K_TITLEBTN, L.btnClose);
         AddHit(ID_BTN_THEME, K_TITLEBTN, L.btnTheme);
         AddHit(ID_BTN_LANG, K_TITLEBTN, L.btnLang);
-
-        L.statusTitle = RectF(32, 72, L.w - 64, 28);
-        L.statusSub = RectF(32, 102, L.w - 64, 18);
-        L.gaugeCenter = RectF((L.w - 160) / 2, 132, 160, 160);
-        L.usedLine = RectF(32, 300, L.w - 64, 18);
-        L.metaLine = RectF(32, 322, L.w - 64, 18);
-        L.btnClean = RectF(32, 356, L.w - 64, 52);
-        L.autoRow = RectF(32, 432, L.w - 64, 42);
-        L.lastClean = RectF(32, 484, L.w - 64, 18);
-        L.linkProcess = RectF(32, 524, 220, 24);
-        L.linkSystem = RectF(L.w - 252, 524, 220, 24);
         AddHit(ID_BTN_CLEAN, K_BUTTON, L.btnClean);
         AddHit(ID_RING_CLEAN, K_BUTTON, RectF(L.gaugeCenter.X - 10, L.gaugeCenter.Y - 10,
                                              L.gaugeCenter.Width + 20, L.gaugeCenter.Height + 20));
@@ -374,30 +377,30 @@ static void BuildLayout(float w, float h, float dpi) {
             L.setStrengthSeg[i] = RectF(bx + i * (sw + 8), 254, sw, 30);
             AddHit((CtlId)(ID_SET_STRENGTH_BASE + i), K_SEG, L.setStrengthSeg[i]);
         }
-        L.setStrengthHint = RectF(bx, 290, bw, 16);
+        L.setStrengthHint = RectF(bx, 288, bw, 16);
 
-        L.setWlLbl = RectF(bx, 304, bw, 18);
-        L.setWlEdit = RectF(bx, 324, bw, 30);
+        L.setWlLbl = RectF(bx, 312, bw, 18);
+        L.setWlEdit = RectF(bx, 332, bw, 30);
         AddHit(ID_ED_WL, K_EDIT, L.setWlEdit);
-        L.setWlHint = RectF(bx, 358, bw, 16);
+        L.setWlHint = RectF(bx, 366, bw, 16);
 
-        L.setAutostartRow = RectF(bx, 382, bw, 34); AddHit(ID_TG_AUTOSTART, K_TOGGLE, L.setAutostartRow);
-        L.setSilentRow = RectF(bx, 424, bw, 34); AddHit(ID_TG_SILENT, K_TOGGLE, L.setSilentRow);
+        L.setAutostartRow = RectF(bx, 390, bw, 34); AddHit(ID_TG_AUTOSTART, K_TOGGLE, L.setAutostartRow);
+        L.setSilentRow = RectF(bx, 432, bw, 34); AddHit(ID_TG_SILENT, K_TOGGLE, L.setSilentRow);
 
         // 界面：主题（3 段）+ 语言（2 段）同一行，减少一档
-        L.setThemeLbl = RectF(bx, 468, bw, 18);
+        L.setThemeLbl = RectF(bx, 476, bw, 18);
         const float tw = 74;
         for (int i = 0; i < 3; i++) {
-            L.setThemeSeg[i] = RectF(bx + i * (tw + 6), 488, tw, 28);
+            L.setThemeSeg[i] = RectF(bx + i * (tw + 6), 496, tw, 28);
             AddHit((CtlId)(ID_SEG_THEME0 + i), K_SEG, L.setThemeSeg[i]);
         }
         const float lw = 62;
         float lx = L.setThemeLbl.GetRight() - (lw * 2 + 6) - 0.0f;
         for (int i = 0; i < 2; i++) {
-            L.setLangSeg[i] = RectF(lx + i * (lw + 6), 488, lw, 28);
+            L.setLangSeg[i] = RectF(lx + i * (lw + 6), 496, lw, 28);
             AddHit(i == 0 ? ID_SEG_ZH : ID_SEG_EN, K_SEG, L.setLangSeg[i]);
         }
-        L.setAdvancedRow = RectF(bx, 528, bw, 34); AddHit(ID_SET_ADVANCED, K_BUTTON, L.setAdvancedRow);
+        L.setAdvancedRow = RectF(bx, 536, bw, 34); AddHit(ID_SET_ADVANCED, K_BUTTON, L.setAdvancedRow);
         return;
     }
 
@@ -602,10 +605,8 @@ static void TrayUpdate(bool force) {
         g_nid.uFlags = NIF_MESSAGE | NIF_TIP;
     }
     double commitPct;
-    unsigned long long nonpaged;
     EnterCriticalSection(&g_lock);
     commitPct = g_metrics.commitPct;
-    nonpaged = g_metrics.nonpagedBytes;
     LeaveCriticalSection(&g_lock);
     wchar_t ct[32];
     swprintf(ct, 32, L"%.0f%%", commitPct);
@@ -613,7 +614,6 @@ static void TrayUpdate(bool force) {
                        Tx(L"可用 ", L"free ") + FormatBytes(avail) +
                        L" · " + Tx(L"已缓存 ", L"cached ") + FormatBytes(standby) +
                        L" · " + Tx(L"提交 ", L"commit ") + ct;
-    if (nonpaged > 1024ULL * MB) tip += std::wstring(L" · ") + Tx(L"池 ", L"pool ") + FormatBytes(nonpaged);
     wcsncpy(g_nid.szTip, tip.c_str(), 127);
     Shell_NotifyIconW(g_trayOn ? NIM_MODIFY : NIM_ADD, &g_nid);
     g_trayOn = true;
@@ -703,7 +703,7 @@ static DWORD WINAPI AutostartThread(LPVOID p) {
 }
 static void SetAutostartAsync(bool want) {
     if (InterlockedCompareExchange(&g_autoBusy, 1, 0) != 0) {
-        g_toast = Tx(L"计划任务正在设置中…", L"Task update in progress…");
+        g_toast = Tx(L"正在设置开机自启…", L"Updating startup…");
         g_lastToastMs = GetTickCount64();
         KickAnim();
         return;
@@ -809,7 +809,7 @@ static void DrawEditBox(Graphics& g, const RectF& r, const std::wstring& value) 
     FillRound(g, r, 7, T.trackFill);
     StrokeRound(g, r, 7, T.border, 1);
     if (value.empty()) {
-        TextAt(g, Tx(L"留空 = 只保护系统与虚拟机", L"empty = system + VM protection only"),
+        TextAt(g, Tx(L"输入进程名，逗号分隔", L"Process names, comma-separated"),
                RectF(r.X + 9, r.Y, r.Width - 16, r.Height), f12, T.text3,
                StringAlignmentNear, StringAlignmentCenter);
         return;
@@ -996,10 +996,10 @@ static void DrawHome(Graphics& g) {
     bool cleaning = g_cleaning != 0;
     bool tidying = cleaning && g_cleanPhase == 2;
     bool paused = AutoPaused();
-    const wchar_t* title = L"运行平稳";
-    const wchar_t* titleEn = L"Running smoothly";
-    const wchar_t* sub = L"内存充足，无需清理";
-    const wchar_t* subEn = L"plenty of memory available";
+    const wchar_t* title = L"内存充足";
+    const wchar_t* titleEn = L"Plenty of memory";
+    const wchar_t* sub = L"无需清理";
+    const wchar_t* subEn = L"no cleaning needed";
     Color tc = T.accent;
     if (tidying) {
         title = L"正在合并内存页"; titleEn = L"Merging pages";
@@ -1011,7 +1011,7 @@ static void DrawHome(Graphics& g) {
         tc = T.accent;
     } else if (paused) {
         title = L"自动清理已暂停"; titleEn = L"Auto clean paused";
-        sub = L"在设置中恢复自动清理"; subEn = L"resume auto clean in settings";
+        sub = L"在托盘菜单中恢复自动清理"; subEn = L"resume from the tray menu";
         tc = T.warn;
     } else if (g_gameMode.load(std::memory_order_relaxed)) {
         title = L"全屏/演示模式"; titleEn = L"Fullscreen / presenting";
@@ -1091,7 +1091,7 @@ static void DrawHome(Graphics& g) {
     swprintf(big, 16, L"%d", (int)(shown + 0.5f));
     TextAt(g, big, RectF(L.gaugeCenter.X - 10, L.gaugeCenter.Y + 36, L.gaugeCenter.Width + 20, 64),
            f42b, T.text, StringAlignmentCenter);
-    const wchar_t* ringLabel = tidying ? Tx(L"整理中", L"merging")
+    const wchar_t* ringLabel = tidying ? Tx(L"合并中", L"merging")
                             : cleaning ? Tx(L"清理中", L"cleaning")
                             : ringHover ? Tx(L"点击清理", L"click to clean")
                                         : Tx(L"使用中", L"in use");
@@ -1104,7 +1104,7 @@ static void DrawHome(Graphics& g) {
              HumanBytes(m.totalPhys).c_str());
     TextAt(g, used, L.usedLine, f12, T.text2, StringAlignmentCenter);
     wchar_t meta[160];
-    swprintf(meta, 160, Tx(L"可回收约 %s · 可用 %s", L"~%s reclaimable · %s available"),
+    swprintf(meta, 160, Tx(L"可释放约 %s · 可用 %s", L"~%s reclaimable · %s available"),
              HumanBytes(g_reclaimableBytes.load()).c_str(),
              HumanBytes(m.availPhys).c_str());
     TextAt(g, meta, L.metaLine, f11, T.text3, StringAlignmentCenter);
@@ -1128,7 +1128,7 @@ static void DrawHome(Graphics& g) {
             g.FillRectangle(&lb, RectF(bx, r.Y + 4.0f, 80.0f, r.Height - 8.0f));
             g.Restore(stB);
         }
-        TextAt(g, tidying ? Tx(L"整理中…", L"Tidying…")
+        TextAt(g, tidying ? Tx(L"合并中…", L"Merging…")
                           : cleaning ? Tx(L"清理中…", L"Cleaning…") : Tx(L"立即清理", L"Clean now"),
                RectF(r.X + 24, r.Y, r.Width - 160, r.Height), f15b, T.btnText);
         TextAt(g, L"Ctrl+Shift+M", RectF(r.X + r.Width - 140, r.Y, 118, r.Height),
@@ -1139,7 +1139,7 @@ static void DrawHome(Graphics& g) {
            L.autoRow.Width - 58, 19), f12, T.text);
     {
         wchar_t sub2[64];
-        swprintf(sub2, 64, s_auto ? Tx(L"已开启 · 超过 %d%% 自动清理", L"on · auto clean above %d%%")
+        swprintf(sub2, 64, s_auto ? Tx(L"已开启 · 高于 %d%% 时清理", L"on · cleans above %d%%")
                                   : Tx(L"已关闭", L"off"), s_threshold);
         TextAt(g, sub2, RectF(L.autoRow.X, L.autoRow.Y + 20, L.autoRow.Width - 58, 15), f11, T.text3);
     }
@@ -1166,8 +1166,14 @@ static void DrawHome(Graphics& g) {
     }
     TextAt(g, last, L.lastClean, f11, T.text3);
 
-    TextAt(g, Tx(L"高占用进程", L"Top processes") + std::wstring(L" ") + std::to_wstring(g_top5Count) + L" ›",
-           L.linkProcess, f12, g_hover == ID_HOME_PROCESS ? T.accent : T.text2);
+    {
+        wchar_t procLink[64];
+        if (g_top5Count > 0)
+            swprintf(procLink, 64, Tx(L"内存占用前 %d ›", L"Top %d by memory ›"), g_top5Count);
+        else
+            wcscpy(procLink, Tx(L"内存占用 ›", L"Memory use ›"));
+        TextAt(g, procLink, L.linkProcess, f12, g_hover == ID_HOME_PROCESS ? T.accent : T.text2);
+    }
     TextAt(g, Tx(L"系统状态", L"System status") + std::wstring(L" ›"),
            L.linkSystem, f12, g_hover == ID_HOME_SYSTEM ? T.accent : T.text2, StringAlignmentFar);
 }
@@ -1200,14 +1206,14 @@ static void DrawSettingsSheet(Graphics& g) {
                   ToggleValue(ID_TG_AUTO, s_auto),
                   s_auto ? L"已开启" : L"已关闭", s_auto ? L"on" : L"off");
 
-    TextAt(g, Tx(L"占用超过", L"Clean above"), L.setThreshLbl, f12, T.text2);
+    TextAt(g, Tx(L"内存高于", L"Clean above"), L.setThreshLbl, f12, T.text2);
     DrawSliderBar(g, L.setThresh, g_sliderValue);
     wchar_t tv[16];
     swprintf(tv, 16, L"%d%%", (int)(g_sliderValue + 0.5f));
     TextAt(g, tv, L.setThreshVal, f12b, T.accent, StringAlignmentFar);
 
     TextAt(g, Tx(L"最短间隔", L"Min interval"), L.setCoolLbl, f12, T.text2);
-    const wchar_t* coolZh[4] = { L"30 秒", L"1 分", L"3 分", L"5 分" };
+    const wchar_t* coolZh[4] = { L"30 秒", L"1 分钟", L"3 分钟", L"5 分钟" };
     const wchar_t* coolEn[4] = { L"30s", L"1m", L"3m", L"5m" };
     DrawSeg(g, L.setCoolSeg, coolZh, coolEn, 4, g_coolSel);
 
@@ -1215,25 +1221,25 @@ static void DrawSettingsSheet(Graphics& g) {
     const wchar_t* strZh[3] = { L"温和", L"均衡", L"深度" };
     const wchar_t* strEn[3] = { L"Mild", L"Balanced", L"Deep" };
     DrawSeg(g, L.setStrengthSeg, strZh, strEn, 3, g_strength);
-    const wchar_t* hintZh = g_strength == 0 ? L"更保守，应用切换零卡顿"
-                          : g_strength == 1 ? L"推荐，释放与流畅的平衡"
+    const wchar_t* hintZh = g_strength == 0 ? L"只清理空闲后台，切回应用不受影响"
+                          : g_strength == 1 ? L"推荐：释放与流畅兼顾"
                                             : L"释放更多，应用切回可能稍慢";
-    const wchar_t* hintEn = g_strength == 0 ? L"Conservative · nothing reloads"
+    const wchar_t* hintEn = g_strength == 0 ? L"Only idle apps · switching back is unaffected"
                           : g_strength == 1 ? L"Recommended · balanced"
                                             : L"Frees more · apps may reload slower";
     TextAt(g, Tx(hintZh, hintEn), L.setStrengthHint, f11, T.text3);
 
-    TextAt(g, Tx(L"保护名单（建议只放虚拟机）", L"Protected list (VMs recommended)"), L.setWlLbl, f12, T.text2);
+    TextAt(g, Tx(L"保护名单", L"Protected list"), L.setWlLbl, f12, T.text2);
     DrawEditBox(g, L.setWlEdit, EditValue(g_edWL, g_cfg.whitelist.c_str()));
-    TextAt(g, Tx(L"虚拟机不在名单也会受保护", L"VMs stay protected even if not listed"),
+    TextAt(g, Tx(L"虚拟机始终受保护，留空即可", L"VMs are always protected; leave empty"),
            L.setWlHint, f11, T.text3);
 
     DrawSwitchRow(g, L.setAutostartRow, L"开机自启", L"Start with Windows", s_autostart,
                   ToggleValue(ID_TG_AUTOSTART, s_autostart));
     DrawSwitchRow(g, L.setSilentRow, L"静默模式", L"Silent mode", s_silent,
                   ToggleValue(ID_TG_SILENT, s_silent),
-                  s_silent ? Tx(L"清理完成不弹通知", L"no clean-finished notifications")
-                           : Tx(L"清理完成后弹通知", L"notify when a clean finishes"));
+                  s_silent ? Tx(L"已开启 · 不弹完成通知", L"on · no notifications")
+                           : Tx(L"已关闭 · 清理完成后通知", L"off · notify when a clean finishes"));
 
     TextAt(g, Tx(L"界面", L"Appearance"), L.setThemeLbl, f12, T.text2);
     const wchar_t* themeZh[3] = { L"自动", L"浅色", L"深色" };
@@ -1253,12 +1259,12 @@ static void DrawSettingsSheet(Graphics& g) {
 
 static void DrawAdvancedSheet(Graphics& g) {
     DrawSheetFrame(g, L"高级设置", L"Advanced", true);
-    TextAt(g, Tx(L"只清理超过", L"Clean above"), L.advMinLbl, f12, T.text2);
+    TextAt(g, Tx(L"只清理大于", L"Clean above"), L.advMinLbl, f12, T.text2);
     const wchar_t* mwZh[3] = { L"64 MB", L"128 MB", L"256 MB" };
     const wchar_t* mwEn[3] = { L"64 MB", L"128 MB", L"256 MB" };
     DrawSeg(g, L.advMinSeg, mwZh, mwEn, 3, g_minWSSel);
     TextAt(g, Tx(L"后台闲置", L"Idle for"), L.advIdleLbl, f12, T.text2);
-    const wchar_t* idZh[3] = { L"1 分", L"5 分", L"10 分" };
+    const wchar_t* idZh[3] = { L"1 分钟", L"5 分钟", L"10 分钟" };
     const wchar_t* idEn[3] = { L"1m", L"5m", L"10m" };
     DrawSeg(g, L.advIdleSeg, idZh, idEn, 3, g_idleSel);
     DrawSwitchRow(g, L.advHotkeyRow, L"全局热键 Ctrl+Shift+M", L"Global hotkey", s_hotkey,
@@ -1268,10 +1274,10 @@ static void DrawAdvancedSheet(Graphics& g) {
     wchar_t idleSubZh[128] = {}, idleSubEn[128] = {};
     if (g_cfg.idleDeepSecs >= 60) {
         int m = g_cfg.idleDeepSecs / 60;
-        swprintf(idleSubZh, 128, L"空闲 %d 分钟后自动清理并合并页，返回即中止", m);
+        swprintf(idleSubZh, 128, L"空闲 %d 分钟后自动清理并合并内存页，返回即中止", m);
         swprintf(idleSubEn, 128, L"auto clean when idle %dm; stops when you're back", m);
     } else {
-        swprintf(idleSubZh, 128, L"空闲 %d 秒后自动清理并合并页，返回即中止", g_cfg.idleDeepSecs);
+        swprintf(idleSubZh, 128, L"空闲 %d 秒后自动清理并合并内存页，返回即中止", g_cfg.idleDeepSecs);
         swprintf(idleSubEn, 128, L"auto clean when idle %ds; stops when you're back", g_cfg.idleDeepSecs);
     }
     DrawSwitchRow(g, L.advIdleDeepRow, L"离开时自动清理", L"Clean when away", s_idleDeep,
@@ -1279,7 +1285,7 @@ static void DrawAdvancedSheet(Graphics& g) {
 }
 
 static void DrawProcessSheet(Graphics& g) {
-    DrawSheetFrame(g, L"高占用进程", L"Top processes", false);
+    DrawSheetFrame(g, L"内存占用前 5", L"Top 5 by memory", false);
     if (g_top5Count == 0) {
         TextAt(g, Tx(L"暂无数据", L"No data"), L.procRows[0], f12, T.text3);
         return;
@@ -1305,7 +1311,7 @@ static void DrawProcessSheet(Graphics& g) {
                       C(g_dark ? 40 : 22, T.accent.GetR(), T.accent.GetG(), T.accent.GetB()));
         }
     }
-    TextAt(g, Tx(L"右键：修剪 / 保护 · 数值为私有工作集", L"Right-click: trim / protect · private working set"),
+    TextAt(g, Tx(L"右键：释放内存 / 保护 · 数值为专用工作集", L"Right-click: free / protect · private working set"),
            L.procHint, f11, T.text3);
 }
 
@@ -1342,12 +1348,14 @@ static void DrawAll(Graphics& g, const RectF* clip) {
     }
 
     DrawBackground(g);
-    DrawChrome(g);
-    DrawHome(g);
-
-    if (g_sheet != Sheet::None) {
+    if (g_sheet == Sheet::None) {
+        DrawChrome(g);
+        DrawHome(g);
+    } else {
+        // Sheet 是模态的：首页不参与绘制。16px 边缘只会露出被裁切的首页碎片，
+        // 看起来像元素错位；只留遮罩更干净，也省掉整屏首页绘制。
         float et = EaseOutCubic(ClampF(g_sheetT, 0, 1));
-        BYTE sa = (BYTE)(205 * et);   // 足够遮住首页文字，避免“元素混乱”观感
+        BYTE sa = (BYTE)(205 * et);
         SolidBrush scrim(C(sa, 8, 12, 18));
         g.FillRectangle(&scrim, RectF(0, 0, L.w, L.h));
         GraphicsState st = g.Save();
@@ -1641,8 +1649,8 @@ static void Activate(CtlId id) {
         g_cfg.theme = (g_themeMode == 1) ? L"light" : L"dark";
         SaveConfig();
         ApplyTheme();
-        g_toast = (g_themeMode == 1) ? Tx(L"已切换浅色主题", L"Light theme")
-                                     : Tx(L"已切换深色主题", L"Dark theme");
+        g_toast = (g_themeMode == 1) ? Tx(L"已切换浅色主题", L"Light theme on")
+                                     : Tx(L"已切换深色主题", L"Dark theme on");
         g_lastToastMs = GetTickCount64();
         KickAnim();
         break;
@@ -1751,7 +1759,7 @@ static DWORD WINAPI CombineThread(LPVOID) {
 }
 static void StartCombine(bool needConfirm) {
     if (g_cleaning != 0) {
-        g_toast = Tx(L"正在清理中，请稍候", L"Cleaning, please wait");
+        g_toast = Tx(L"正在清理，请稍候", L"Cleaning, please wait");
         g_lastToastMs = GetTickCount64();
         KickAnim();
         return;
@@ -1776,7 +1784,7 @@ static void ShowTop5Menu(int idx) {
     if (base.size() > 4 && _wcsicmp(base.c_str() + base.size() - 4, L".exe") == 0)
         base.resize(base.size() - 4);
     wchar_t trimLabel[160];
-    swprintf(trimLabel, 160, Tx(L"修剪此进程（%s）", L"Trim this process (%s)"),
+    swprintf(trimLabel, 160, Tx(L"释放此进程内存（%s）", L"Free this app's memory (%s)"),
              FormatBytes(ProcPrivateWS(p)).c_str());
     HMENU m = CreatePopupMenu();
     AppendMenuW(m, MF_STRING | (prot ? MF_GRAYED : 0), 1, trimLabel);
@@ -1791,8 +1799,8 @@ static void ShowTop5Menu(int idx) {
     PostMessageW(g_hwnd, WM_NULL, 0, 0);
     if (cmd == 1) {
         bool ok = TrimPid(p.pid);
-        g_toast = ok ? (Tx(L"已修剪 ", L"Trimmed ") + p.name + L" · " + FormatBytes(ProcPrivateWS(p)))
-                     : (Tx(L"修剪失败：", L"Trim failed: ") + p.name);
+        g_toast = ok ? (Tx(L"已释放 ", L"Freed ") + p.name + L" · " + FormatBytes(ProcPrivateWS(p)))
+                     : (Tx(L"释放失败：", L"Couldn't free: ") + p.name);
         g_lastToastMs = GetTickCount64();
         Log(L"单进程修剪：%s (PID %u, 私有WS %s) -> %s", p.name.c_str(), p.pid,
             FormatBytes(ProcPrivateWS(p)).c_str(), ok ? L"成功" : L"失败");
@@ -1820,7 +1828,7 @@ static void ShowTrayMenu(int x, int y) {
     AppendMenuW(m, MF_STRING, 3, Tx(L"打开面板", L"Open panel"));
     AppendMenuW(m, MF_STRING | (s_autostartInstalled ? MF_CHECKED : 0), 4, Tx(L"开机自启", L"Start with Windows"));
     AppendMenuW(m, MF_STRING, 5, Tx(L"查看日志", L"Open log"));
-    AppendMenuW(m, MF_STRING, 7, Tx(L"系统检查…", L"System check…"));
+    AppendMenuW(m, MF_STRING, 7, Tx(L"系统状态…", L"System status…"));
     AppendMenuW(m, MF_STRING | (AutoPaused() ? MF_CHECKED : 0), 8,
                 AutoPaused() ? Tx(L"恢复自动清理", L"Resume auto clean")
                              : Tx(L"暂停自动清理 1 小时", L"Pause auto clean 1h"));
@@ -2122,11 +2130,11 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             s_autostartInstalled = want;
             g_cfg.autostart = want;
             SaveConfig();
-                g_toast = want ? Tx(L"已开启开机自启", L"Start with Windows enabled")
-                           : Tx(L"已关闭开机自启", L"Start with Windows disabled");
+                g_toast = want ? Tx(L"开机自启已开启", L"Start with Windows enabled")
+                           : Tx(L"开机自启已关闭", L"Start with Windows disabled");
         } else {
             s_autostart = s_autostartInstalled;
-                g_toast = Tx(L"计划任务操作失败，请查看日志", L"Task update failed; see log");
+                g_toast = Tx(L"开机自启设置失败，请查看日志", L"Couldn't update startup; see log");
         }
         g_lastToastMs = GetTickCount64();
         if (g_hwnd) InvalidateRect(g_hwnd, nullptr, FALSE);
@@ -2474,11 +2482,12 @@ static void DrawSystemSheet(Graphics& g) {
     TextAt(g, summary, RectF(L.sysSummary.X, L.sysSummary.Y, L.sysSummary.Width, 20), f15b, sc);
     const wchar_t* summarySub = Tx(L"内存压缩 · 页面合并 · 已提交", L"compression · page merging · commit");
     if (know && g_sys.commitPct > 90.0)
-        summarySub = Tx(L"已提交接近上限，建议关闭大程序",
+        summarySub = Tx(L"已提交接近上限，建议关闭大型应用",
                         L"commit near limit; close heavy apps");
     else if (know && g_sys.nonpaged > 1024ULL * MB)
-        summarySub = Tx(L"内核内存偏高，展开查看明细",
-                        L"kernel memory is high; expand for details");
+        summarySub = g_systemExpanded
+            ? Tx(L"内核内存偏高", L"kernel memory is high")
+            : Tx(L"内核内存偏高，展开查看明细", L"kernel memory is high; expand for details");
     TextAt(g, summarySub, RectF(L.sysSummary.X, L.sysSummary.Y + 22, L.sysSummary.Width, 16), f11, T.text3);
 
     auto row = [&](int i, bool ok, const wchar_t* zh, const wchar_t* en, const std::wstring& v, bool warn) {
@@ -2572,7 +2581,7 @@ static void ExportDiagnostics() {
     std::wstring out;
     wchar_t line[1024];
     swprintf(line, 1024,
-             L"MemSweep v1.9.3 diagnostics\r\nTime: %04d-%02d-%02d %02d:%02d:%02d\r\n\r\n",
+             L"MemSweep v1.9.4 diagnostics\r\nTime: %04d-%02d-%02d %02d:%02d:%02d\r\n\r\n",
              t.wYear, t.wMonth, t.wDay, t.wHour, t.wMinute, t.wSecond);
     out += line;
     Metrics m;
@@ -2755,6 +2764,13 @@ static void ShowSystemCheck() {
 int RenderSysCheckSnapshot(const std::wstring& path) {
     InitGdiplus();
     InitThemeFromConfig();
+    {
+        wchar_t env[16] = {};
+        if (GetEnvironmentVariableW(L"MEMSweep_THEME", env, 16)) {
+            if (_wcsicmp(env, L"dark") == 0) { g_themeMode = 2; ApplyTheme(); }
+            else if (_wcsicmp(env, L"light") == 0) { g_themeMode = 1; ApplyTheme(); }
+        }
+    }
     CreateFonts();
     {
         Snapshot snap;
@@ -2960,7 +2976,7 @@ int RenderUISnapshot(const std::wstring& path) {
 }
 
 int RunUI(HINSTANCE hInst, bool showOnStart) {
-    Log(L"UI start (v1.9.3, admin=%d)", (int)IsElevated());
+    Log(L"UI start (v1.9.4, admin=%d)", (int)IsElevated());
     InitGdiplus();
     InitThemeFromConfig();
     CreateFonts();

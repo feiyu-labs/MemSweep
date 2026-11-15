@@ -750,3 +750,42 @@ v1.9.3.0，369,664 字节，SHA256 `13066C82734B44149E1A575AD93175A15CB1D34E69DE
 
 来源：
 - https://learn.microsoft.com/en-us/windows/win32/inputdev/wm-nchittest（HTCAPTION/HTCLIENT 语义）
+
+## 二十二、v1.9.4 残影真因与文案复核（2026-11-16 第十三轮）
+
+### 1. “遮罩后元素偏移”的真因（不是透明度）
+
+`BuildLayout` 的首页分支只在 `g_sheet == Sheet::None` 时执行。Sheet 打开后
+`BuildLayout` 提前 return，`L.statusTitle/gaugeCenter/btnClean/...` 保持 `Layout()`
+默认构造值；GDI+ 的 `RectF` 默认构造**不初始化成员**，于是 `DrawHome` 把这些元素
+画到随机坐标。用户看到的“logo/标题/文字偏移出原位”就是未初始化矩形的随机值。
+
+证据链：
+- `/uipng` + `MEMSweep_SHEET=settings` 离屏渲染 1:1 复现（2.0x 与 1.5x 均出现）；
+- 同一构建、`Sheet::None` 的 `/uipng` 首页完全正常；
+- 残影内容与首页元素一一对应（标题、状态句、按钮文字），只是坐标错乱。
+
+修复：
+1. 首页几何**无条件**计算，Sheet 状态下也有效；
+2. `DrawAll` 在 Sheet 打开时只画「背景 + 遮罩 + Sheet」，不画首页/标题栏。
+   满高 Sheet 的边缘只露出被裁切的首页碎片，本来就是视觉噪声。
+
+### 2. 文案复核依据
+
+- Microsoft《Guidelines for app settings》：设置少而精、修改立即生效、开关用肯定式、必要时才加描述；
+- Microsoft《User Interface Text》：标签简短、无结尾句号、避免重复解释与绝对化措辞；
+- 任务管理器术语：使用中 / 可用 / 已缓存 / 已提交 / 专用工作集；
+- Mem Reduct 的结果口径：“已释放 X”，与本地 Toast 一致。
+
+本轮修正：`占用超过→内存高于`、`1 分→1 分钟`、静默模式副文案改为「状态 + 效果」、
+保护名单占位符给格式（逗号分隔）、首页 `运行平稳→内存充足`、`可回收→可释放`、
+`高占用进程→内存占用前 5`、右键 `修剪→释放此进程内存`、tooltip 去掉“池”。
+
+### 3. 最终状态
+
+v1.9.4.0，369,664 字节，SHA256 `D0B91D3B79EB8C00D5A1C3D24101E3A1F11FF7EC86AADD5B4860C86C1B278013`。
+`build.cmd test` PASS 零警告；安装版 selftest PASS；2.0x/1.5x、中/英、浅/深离屏渲染无残影。
+
+来源：
+- https://learn.microsoft.com/en-us/windows/apps/design/app-settings/guidelines-for-app-settings
+- https://learn.microsoft.com/en-us/windows/win32/uxguide/text-ui
