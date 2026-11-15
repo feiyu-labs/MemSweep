@@ -117,6 +117,9 @@ build.cmd test     :: dev + /selftest + /idlecheck + /uipng + /checkpng
 - **标题栏控件清单**：新增标题栏按钮必须同步四处——`Layout` 矩形、`BuildLayout` 命中、
   `DrawChrome` 绘制、**`WM_NCHITTEST` 的 `HTCLIENT` 排除清单**（漏掉会被 `HTCAPTION`
   拖拽吞掉点击，v1.9.3 教训）。
+- **标题栏图标规范**：统一 1.5px 圆头描边、16px 光学尺寸、30×30 悬停面；idle `T.text2`、
+  hover `T.text`。主题/语言都显示“点击后”的状态（浅色→月亮、深色→太阳；中文→EN、英文→中），
+  两个快切按钮不得一个显示当前、一个显示目标。只有窗口关闭按钮使用 danger 悬停色。
 
 ## 5.1 线程模型
 

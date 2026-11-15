@@ -307,8 +307,8 @@ static void BuildLayout(float w, float h, float dpi) {
     L.btnClose = RectF(L.w - 44, 0, 44, 44);
     L.btnMin = RectF(L.w - 88, 0, 44, 44);
     L.btnSettings = RectF(L.w - 132, 0, 44, 44);
-    L.btnTheme = RectF(L.w - 170, 6, 34, 34);
-    L.btnLang = RectF(L.w - 212, 6, 40, 34);
+    L.btnTheme = RectF(L.w - 170, 5, 34, 34);
+    L.btnLang = RectF(L.w - 216, 5, 40, 34);
 
     float sh = L.h - 32;
     if (g_sheet == Sheet::Advanced) sh = 380;
@@ -846,28 +846,40 @@ static void DrawBackground(Graphics& g) {
     g.FillRectangle(&bg, RectF(0, 0, L.w, L.h));
 }
 
+// 标题栏图标：统一 1.5px 圆头描边、16px 光学尺寸、30px 悬停面。
+// 主题与语言都显示“点击后”的状态：浅色→月亮（切深色），深色→太阳（切浅色）；
+// 中文→EN，英文→中。这样两个快切按钮的语义一致。
 static void DrawIconButton(Graphics& g, const RectF& r, int id, bool close, bool gear) {
     bool hv = g_hover == id;
-    float pillY = r.Height >= 34 ? 4.0f : 10.0f;
-    if (hv) {
-        FillRound(g, RectF(r.X + 4, r.Y + pillY, r.Width - 8, r.Height - pillY * 2), 8,
-                  close ? C(g_dark ? 70 : 30, 239, 68, 68) : C(g_dark ? 45 : 25, 128, 128, 128));
-    }
-    Color c = hv ? (close ? T.danger : T.text) : T.text2;
-    Pen pen(c, 1.5f);
+    const bool danger = (id == ID_BTN_CLOSE);
     float cx = r.X + r.Width / 2, cy = r.Y + r.Height / 2;
+    // 悬停面用不透明色：月牙的“咬口”需要精确匹配底色，半透明会露边。
+    const Color hoverFill = danger
+        ? C(255, g_dark ? 80 : 246, g_dark ? 30 : 230, g_dark ? 30 : 230)
+        : C(255, g_dark ? 33 : 234, g_dark ? 36 : 236, g_dark ? 41 : 239);
+    if (hv) {
+        const float hs = 30.0f;
+        FillRound(g, RectF(cx - hs / 2, cy - hs / 2, hs, hs), 8, hoverFill);
+    }
+    Color c = hv ? (danger ? T.danger : T.text) : T.text2;
+    Pen pen(c, 1.5f);
+    pen.SetStartCap(LineCapRound);
+    pen.SetEndCap(LineCapRound);
+    pen.SetLineJoin(LineJoinRound);
     if (id == ID_BTN_THEME) {
-        // 太阳 / 月亮：随当前生效主题切换（quick toggle 状态）
-        if (g_dark) {
-            g.DrawEllipse(&pen, RectF(cx - 6, cy - 6, 12, 12));
-            SolidBrush moon(C(255, c.GetR(), c.GetG(), c.GetB()));
-            g.FillEllipse(&moon, RectF(cx - 1, cy - 7, 11, 11));
+        if (!g_dark) {
+            // 月牙 = 实心圆 + 用当前表面色“咬”掉一块。13px 下比描边路径更干净；
+            // 与太阳（纯描边）形成昼夜差异，但笔画重量一致。
+            SolidBrush mb(c);
+            g.FillEllipse(&mb, RectF(cx - 6.5f, cy - 6.5f, 13, 13));
+            SolidBrush bite(hv ? hoverFill : T.bg1);
+            g.FillEllipse(&bite, RectF(cx - 2.6f, cy - 7.2f, 11.4f, 11.4f));
         } else {
-            g.DrawEllipse(&pen, RectF(cx - 5, cy - 5, 10, 10));
+            g.DrawEllipse(&pen, RectF(cx - 4.2f, cy - 4.2f, 8.4f, 8.4f));
             for (int i = 0; i < 8; i++) {
                 float a = i * 3.1415926f / 4.0f;
-                float dx = cosf(a) * 8.5f, dy = sinf(a) * 8.5f;
-                g.DrawLine(&pen, cx + dx * 0.8f, cy + dy * 0.8f, cx + dx * 1.15f, cy + dy * 1.15f);
+                float dx = cosf(a), dy = sinf(a);
+                g.DrawLine(&pen, cx + dx * 6.8f, cy + dy * 6.8f, cx + dx * 8.8f, cy + dy * 8.8f);
             }
         }
         return;
@@ -881,15 +893,15 @@ static void DrawIconButton(Graphics& g, const RectF& r, int id, bool close, bool
         g.DrawLine(&pen, cx - 4.5f, cy - 4.5f, cx + 4.5f, cy + 4.5f);
         g.DrawLine(&pen, cx + 4.5f, cy - 4.5f, cx - 4.5f, cy + 4.5f);
     } else if (gear) {
-        g.DrawLine(&pen, cx - 7, cy - 5, cx + 7, cy - 5);
-        g.DrawLine(&pen, cx - 7, cy + 5, cx + 7, cy + 5);
-        SolidBrush kb(C(255, 255, 255, 255));
-        g.FillEllipse(&kb, RectF(cx - 7, cy - 8, 6, 6));
-        g.DrawEllipse(&pen, RectF(cx - 7, cy - 8, 6, 6));
-        g.FillEllipse(&kb, RectF(cx + 2, cy + 2, 6, 6));
-        g.DrawEllipse(&pen, RectF(cx + 2, cy + 2, 6, 6));
+        // 设置：双滑杆。线段在旋钮处断开，全部用同一笔画，不填任何底色。
+        g.DrawLine(&pen, cx - 7, cy - 4, cx - 4.5f, cy - 4);
+        g.DrawEllipse(&pen, RectF(cx - 4.5f, cy - 6.5f, 5, 5));
+        g.DrawLine(&pen, cx + 0.5f, cy - 4, cx + 7, cy - 4);
+        g.DrawLine(&pen, cx - 7, cy + 4, cx - 0.5f, cy + 4);
+        g.DrawEllipse(&pen, RectF(cx - 0.5f, cy + 1.5f, 5, 5));
+        g.DrawLine(&pen, cx + 4.5f, cy + 4, cx + 7, cy + 4);
     } else {
-        g.DrawLine(&pen, cx - 6, cy + 1, cx + 6, cy + 1);
+        g.DrawLine(&pen, cx - 6, cy + 0.5f, cx + 6, cy + 0.5f);
     }
 }
 
@@ -2581,7 +2593,7 @@ static void ExportDiagnostics() {
     std::wstring out;
     wchar_t line[1024];
     swprintf(line, 1024,
-             L"MemSweep v1.9.4 diagnostics\r\nTime: %04d-%02d-%02d %02d:%02d:%02d\r\n\r\n",
+             L"MemSweep v1.9.5 diagnostics\r\nTime: %04d-%02d-%02d %02d:%02d:%02d\r\n\r\n",
              t.wYear, t.wMonth, t.wDay, t.wHour, t.wMinute, t.wSecond);
     out += line;
     Metrics m;
@@ -2976,7 +2988,7 @@ int RenderUISnapshot(const std::wstring& path) {
 }
 
 int RunUI(HINSTANCE hInst, bool showOnStart) {
-    Log(L"UI start (v1.9.4, admin=%d)", (int)IsElevated());
+    Log(L"UI start (v1.9.5, admin=%d)", (int)IsElevated());
     InitGdiplus();
     InitThemeFromConfig();
     CreateFonts();
