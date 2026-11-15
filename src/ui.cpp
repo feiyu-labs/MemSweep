@@ -12,7 +12,6 @@
 #include <string>
 #include <vector>
 #include <unordered_map>
-#include <cmath>
 
 using namespace Gdiplus;
 
@@ -27,12 +26,11 @@ namespace ms {
 // ---------------------------------------------------------------------------
 struct Theme {
     Color bg1, bg2;
-    Color card, cardTop, border, divider;
+    Color card, cardTop, border;
     Color text, text2, text3;
     Color accent, accent2, warn, danger;
     Color track, trackFill, trackOff;
     Color btnText;
-    bool dark = true;
 };
 static Theme T;
 
@@ -45,7 +43,6 @@ static void BuildTheme(bool dark) {
         T.card     = C(255, 24, 28, 36);
         T.cardTop  = C(255, 31, 36, 46);
         T.border   = C(255, 44, 50, 62);
-        T.divider  = C(255, 38, 43, 54);
         T.text     = C(255, 235, 238, 243);
         T.text2    = C(255, 158, 166, 178);
         T.text3    = C(255, 108, 116, 128);
@@ -57,14 +54,12 @@ static void BuildTheme(bool dark) {
         T.trackOff = C(255, 58, 66, 80);
         T.trackFill= C(255, 39, 45, 56);
         T.btnText  = C(255, 8, 24, 18);
-        T.dark     = true;
     } else {
         T.bg1      = C(255, 246, 248, 251);
         T.bg2      = C(255, 240, 243, 248);
         T.card     = C(255, 255, 255, 255);
         T.cardTop  = C(255, 252, 253, 255);
         T.border   = C(255, 226, 231, 238);
-        T.divider  = C(255, 236, 240, 245);
         T.text     = C(255, 17, 24, 39);
         T.text2    = C(255, 100, 112, 128);
         T.text3    = C(255, 148, 158, 172);
@@ -76,7 +71,6 @@ static void BuildTheme(bool dark) {
         T.trackOff = C(255, 203, 213, 225);
         T.trackFill= C(255, 241, 245, 249);
         T.btnText  = C(255, 255, 255, 255);
-        T.dark     = false;
     }
 }
 
@@ -146,7 +140,6 @@ static void TextAt(Graphics& g, const std::wstring& s, const RectF& r, Font* f,
     SolidBrush b(c);
     g.DrawString(s.c_str(), (INT)s.size(), f, r, &fmt, &b);
 }
-static std::wstring HumanBytes(unsigned long long b) { return FormatBytes(b); }
 
 // ---------------------------------------------------------------------------
 // 控件模型
@@ -159,7 +152,6 @@ enum CtlId {
     ID_HOME_PROCESS, ID_HOME_SYSTEM,
     ID_TG_AUTO, ID_TG_HOTKEY, ID_TG_ECO, ID_TG_AUTOSTART, ID_TG_SILENT, ID_TG_IDLE_DEEP,
     ID_SL_THRESH,
-    ID_SEG_ZH, ID_SEG_EN, ID_SEG_THEME0, ID_SEG_THEME1, ID_SEG_THEME2,
     ID_SYS_MC, ID_SYS_PC, ID_SYS_PF, ID_SYS_WSL, ID_SYS_EXPORT, ID_SYS_MORE,
     ID_SET_ADVANCED, ID_ADV_BACK, ID_SET_ABOUT,
     ID_ABOUT_REPO, ID_ABOUT_ISSUES, ID_ABOUT_UPDATES,
@@ -274,20 +266,20 @@ struct Layout {
     RectF btnClean, autoRow, lastClean, linkProcess, linkSystem;
 
     // Sheet
-    RectF sheet, sheetHeader, sheetTitle, sheetClose, sheetBody;
+    RectF sheet, sheetTitle, sheetClose, sheetBody;
 
     // 设置
     RectF setAutoRow, setThreshLbl, setThresh, setThreshVal;
     RectF setCoolLbl, setCoolSeg[4], setStrengthLbl, setStrengthSeg[3], setStrengthHint;
     RectF setWlLbl, setWlEdit, setWlHint, setAutostartRow, setSilentRow;
-    RectF setThemeLbl, setThemeSeg[3], setLangLbl, setLangSeg[2], setAdvancedRow, setAboutLink;
+    RectF setAdvancedRow, setAboutLink;
 
     // 关于
     RectF aboutLogo, aboutTitle, aboutVer, aboutDesc, aboutRows[3], aboutFoot;
 
     // 高级
     RectF advMinLbl, advMinSeg[3], advIdleLbl, advIdleSeg[3];
-    RectF advHotkeyRow, advEcoRow, advSilentRow;
+    RectF advHotkeyRow, advEcoRow;
     RectF advIdleDeepRow, advBack;
 
     // 进程
@@ -320,7 +312,6 @@ static void BuildLayout(float w, float h, float dpi) {
     else if (g_sheet == Sheet::System) sh = g_systemExpanded ? 520 : 360;
     else if (g_sheet == Sheet::About) sh = 360;
     L.sheet = RectF(16, (L.h - sh) / 2, L.w - 32, sh);
-    L.sheetHeader = RectF(L.sheet.X, L.sheet.Y, L.sheet.Width, 52);
     L.sheetTitle = RectF(L.sheet.X + 24, L.sheet.Y + 12, 260, 28);
     L.sheetClose = RectF(L.sheet.GetRight() - 44, L.sheet.Y + 8, 32, 32);
     L.sheetBody = RectF(L.sheet.X + 24, L.sheet.Y + 62, L.sheet.Width - 48, L.sheet.Height - 82);
@@ -363,50 +354,38 @@ static void BuildLayout(float w, float h, float dpi) {
     AddHit(ID_SHEET_CLOSE, K_TITLEBTN, L.sheetClose);
 
     if (g_sheet == Sheet::Settings) {
-        L.setAutoRow = RectF(bx, 74, bw, 36); AddHit(ID_TG_AUTO, K_TOGGLE, L.setAutoRow);
-        L.setThreshLbl = RectF(bx, 124, 130, 20);
-        L.setThresh = RectF(bx + 136, 124, bw - 196, 20);
-        L.setThreshVal = RectF(bx + bw - 52, 122, 52, 22);
-        AddHit(ID_SL_THRESH, K_SLIDER, RectF(bx + 126, 112, bw - 180, 44));
+        // v1.9.7：界面（主题/语言）只保留标题栏快切，设置页不再重复，腾出的空间用于分组留白。
+        L.setAutoRow = RectF(bx, 76, bw, 36); AddHit(ID_TG_AUTO, K_TOGGLE, L.setAutoRow);
+        L.setThreshLbl = RectF(bx, 130, 130, 20);
+        L.setThresh = RectF(bx + 136, 130, bw - 196, 20);
+        L.setThreshVal = RectF(bx + bw - 52, 128, 52, 22);
+        AddHit(ID_SL_THRESH, K_SLIDER, RectF(bx + 126, 118, bw - 180, 44));
 
-        L.setCoolLbl = RectF(bx, 166, 150, 18);
+        L.setCoolLbl = RectF(bx, 172, 150, 18);
         const float cw = (bw - 24) / 4.0f;
         for (int i = 0; i < 4; i++) {
-            L.setCoolSeg[i] = RectF(bx + i * (cw + 8), 188, cw, 30);
+            L.setCoolSeg[i] = RectF(bx + i * (cw + 8), 192, cw, 30);
             AddHit((CtlId)(ID_SET_COOL_BASE + i), K_SEG, L.setCoolSeg[i]);
         }
 
-        L.setStrengthLbl = RectF(bx, 234, 150, 18);
+        L.setStrengthLbl = RectF(bx, 244, 150, 18);
         const float sw = (bw - 16) / 3.0f;
         for (int i = 0; i < 3; i++) {
-            L.setStrengthSeg[i] = RectF(bx + i * (sw + 8), 254, sw, 30);
+            L.setStrengthSeg[i] = RectF(bx + i * (sw + 8), 264, sw, 30);
             AddHit((CtlId)(ID_SET_STRENGTH_BASE + i), K_SEG, L.setStrengthSeg[i]);
         }
-        L.setStrengthHint = RectF(bx, 288, bw, 16);
+        L.setStrengthHint = RectF(bx, 300, bw, 16);
 
-        L.setWlLbl = RectF(bx, 312, bw, 18);
-        L.setWlEdit = RectF(bx, 332, bw, 30);
+        L.setWlLbl = RectF(bx, 332, bw, 18);
+        L.setWlEdit = RectF(bx, 352, bw, 30);
         AddHit(ID_ED_WL, K_EDIT, L.setWlEdit);
-        L.setWlHint = RectF(bx, 366, bw, 16);
+        L.setWlHint = RectF(bx, 388, bw, 16);
 
-        L.setAutostartRow = RectF(bx, 390, bw, 34); AddHit(ID_TG_AUTOSTART, K_TOGGLE, L.setAutostartRow);
-        L.setSilentRow = RectF(bx, 432, bw, 34); AddHit(ID_TG_SILENT, K_TOGGLE, L.setSilentRow);
+        L.setAutostartRow = RectF(bx, 418, bw, 34); AddHit(ID_TG_AUTOSTART, K_TOGGLE, L.setAutostartRow);
+        L.setSilentRow = RectF(bx, 466, bw, 34); AddHit(ID_TG_SILENT, K_TOGGLE, L.setSilentRow);
 
-        // 界面：主题（3 段）+ 语言（2 段）同一行，减少一档
-        L.setThemeLbl = RectF(bx, 476, bw, 18);
-        const float tw = 74;
-        for (int i = 0; i < 3; i++) {
-            L.setThemeSeg[i] = RectF(bx + i * (tw + 6), 496, tw, 28);
-            AddHit((CtlId)(ID_SEG_THEME0 + i), K_SEG, L.setThemeSeg[i]);
-        }
-        const float lw = 62;
-        float lx = L.setThemeLbl.GetRight() - (lw * 2 + 6) - 0.0f;
-        for (int i = 0; i < 2; i++) {
-            L.setLangSeg[i] = RectF(lx + i * (lw + 6), 496, lw, 28);
-            AddHit(i == 0 ? ID_SEG_ZH : ID_SEG_EN, K_SEG, L.setLangSeg[i]);
-        }
-        L.setAboutLink = RectF(bx, 536, 150, 34); AddHit(ID_SET_ABOUT, K_BUTTON, L.setAboutLink);
-        L.setAdvancedRow = RectF(bx + 158, 536, bw - 158, 34);
+        L.setAboutLink = RectF(bx, 532, 150, 34); AddHit(ID_SET_ABOUT, K_BUTTON, L.setAboutLink);
+        L.setAdvancedRow = RectF(bx + 158, 532, bw - 158, 34);
         AddHit(ID_SET_ADVANCED, K_BUTTON, L.setAdvancedRow);
         return;
     }
@@ -494,7 +473,6 @@ struct StatCache {
     int pct = -1;
     unsigned long long avail = 0, freeB = 0, standby = 0, commit = 0;
     double hf = -1;
-    std::wstring topNames;
 } g_sc;
 
 // 绘制缓存（避免动画期间每秒复制整份进程快照）
@@ -830,7 +808,7 @@ static void DrawEditBox(Graphics& g, const RectF& r, const std::wstring& value) 
     FillRound(g, r, 7, T.trackFill);
     StrokeRound(g, r, 7, T.border, 1);
     if (value.empty()) {
-        TextAt(g, Tx(L"输入进程名，逗号分隔", L"Process names, comma-separated"),
+        TextAt(g, Tx(L"例如 chrome, idea64", L"e.g. chrome, idea64"),
                RectF(r.X + 9, r.Y, r.Width - 16, r.Height), f12, T.text3,
                StringAlignmentNear, StringAlignmentCenter);
         return;
@@ -852,6 +830,13 @@ static void PositionEdits() {
                (int)SD(L.setWlEdit.Width - 4), (int)SD(L.setWlEdit.Height - 4), TRUE);
     ShowWindow(g_edWL, SW_SHOWNA);
 }
+// 原生 Edit 会盖住 GDI+ 占位符；用系统 cue banner 显示示例，语言切换时同步。
+static void UpdateWhitelistCue() {
+    if (!g_edWL) return;
+    SendMessageW(g_edWL, EM_SETCUEBANNER, TRUE,
+                 (LPARAM)(g_zh.load(std::memory_order_relaxed) ? L"例如 chrome, idea64"
+                                                                : L"e.g. chrome, idea64"));
+}
 
 // ---------------------------------------------------------------------------
 // ---------------------------------------------------------------------------
@@ -870,7 +855,7 @@ static void DrawBackground(Graphics& g) {
 // 标题栏图标：统一 1.5px 圆头描边、16px 光学尺寸、30px 悬停面。
 // 主题与语言都显示“点击后”的状态：浅色→月亮（切深色），深色→太阳（切浅色）；
 // 中文→EN，英文→中。这样两个快切按钮的语义一致。
-static void DrawIconButton(Graphics& g, const RectF& r, int id, bool close, bool gear) {
+static void DrawIconButton(Graphics& g, const RectF& r, int id, bool close, bool settings) {
     bool hv = g_hover == id;
     const bool danger = (id == ID_BTN_CLOSE);
     float cx = r.X + r.Width / 2, cy = r.Y + r.Height / 2;
@@ -913,7 +898,7 @@ static void DrawIconButton(Graphics& g, const RectF& r, int id, bool close, bool
     if (close) {
         g.DrawLine(&pen, cx - 4.5f, cy - 4.5f, cx + 4.5f, cy + 4.5f);
         g.DrawLine(&pen, cx + 4.5f, cy - 4.5f, cx - 4.5f, cy + 4.5f);
-    } else if (gear) {
+    } else if (settings) {
         // 设置：双滑杆。线段在旋钮处断开，全部用同一笔画，不填任何底色。
         g.DrawLine(&pen, cx - 7, cy - 4, cx - 4.5f, cy - 4);
         g.DrawEllipse(&pen, RectF(cx - 4.5f, cy - 6.5f, 5, 5));
@@ -1138,13 +1123,13 @@ static void DrawHome(Graphics& g) {
            StringAlignmentCenter);
 
     wchar_t used[96];
-    swprintf(used, 96, L"%s / %s", HumanBytes(m.totalPhys - m.availPhys).c_str(),
-             HumanBytes(m.totalPhys).c_str());
+    swprintf(used, 96, L"%s / %s", FormatBytes(m.totalPhys - m.availPhys).c_str(),
+             FormatBytes(m.totalPhys).c_str());
     TextAt(g, used, L.usedLine, f12, T.text2, StringAlignmentCenter);
     wchar_t meta[160];
     swprintf(meta, 160, Tx(L"可释放约 %s · 可用 %s", L"~%s reclaimable · %s available"),
-             HumanBytes(g_reclaimableBytes.load()).c_str(),
-             HumanBytes(m.availPhys).c_str());
+             FormatBytes(g_reclaimableBytes.load()).c_str(),
+             FormatBytes(m.availPhys).c_str());
     TextAt(g, meta, L.metaLine, f11, T.text3, StringAlignmentCenter);
 
     {
@@ -1196,7 +1181,7 @@ static void DrawHome(Graphics& g) {
         unsigned long long freedShown = g_lastFreeGain.load() > g_lastAvailGain.load()
                                       ? g_lastFreeGain.load() : g_lastAvailGain.load();
         if (freedShown >= 16ULL * MB)
-            swprintf(gain, 64, Tx(L"释放 %s", L"freed %s"), HumanBytes(freedShown).c_str());
+            swprintf(gain, 64, Tx(L"释放 %s", L"freed %s"), FormatBytes(freedShown).c_str());
         if (gain[0]) swprintf(last, 256, Tx(L"上次清理 %s · %s", L"last clean %s · %s"), when, gain);
         else swprintf(last, 256, Tx(L"上次清理 %s", L"last clean %s"), when);
     } else {
@@ -1269,7 +1254,7 @@ static void DrawSettingsSheet(Graphics& g) {
 
     TextAt(g, Tx(L"保护名单", L"Protected list"), L.setWlLbl, f12, T.text2);
     DrawEditBox(g, L.setWlEdit, EditValue(g_edWL, g_cfg.whitelist.c_str()));
-    TextAt(g, Tx(L"虚拟机始终受保护，留空即可", L"VMs are always protected; leave empty"),
+    TextAt(g, Tx(L"清理时跳过这些进程；虚拟机始终受保护", L"Skipped when cleaning; VMs are always protected"),
            L.setWlHint, f11, T.text3);
 
     DrawSwitchRow(g, L.setAutostartRow, L"开机自启", L"Start with Windows", s_autostart,
@@ -1278,14 +1263,6 @@ static void DrawSettingsSheet(Graphics& g) {
                   ToggleValue(ID_TG_SILENT, s_silent),
                   s_silent ? Tx(L"已开启 · 不弹完成通知", L"on · no notifications")
                            : Tx(L"已关闭 · 清理完成后通知", L"off · notify when a clean finishes"));
-
-    TextAt(g, Tx(L"界面", L"Appearance"), L.setThemeLbl, f12, T.text2);
-    const wchar_t* themeZh[3] = { L"自动", L"浅色", L"深色" };
-    const wchar_t* themeEn[3] = { L"Auto", L"Light", L"Dark" };
-    DrawSeg(g, L.setThemeSeg, themeZh, themeEn, 3, g_themeMode);
-    const wchar_t* langZh[2] = { L"中文", L"EN" };
-    const wchar_t* langEn[2] = { L"中文", L"EN" };
-    DrawSeg(g, L.setLangSeg, langZh, langEn, 2, g_zh ? 0 : 1);
 
     bool aboutHover = g_hover == ID_SET_ABOUT;
     FillRound(g, L.setAboutLink, 8, aboutHover ? T.trackFill : C(0, 0, 0, 0));
@@ -1326,6 +1303,10 @@ static void DrawAdvancedSheet(Graphics& g) {
     }
     DrawSwitchRow(g, L.advIdleDeepRow, L"离开时自动清理", L"Clean when away", s_idleDeep,
                   ToggleValue(ID_TG_IDLE_DEEP, s_idleDeep), idleSubZh, idleSubEn);
+}
+
+static void OpenUrl(const wchar_t* url) {
+    ShellExecuteW(nullptr, L"open", url, nullptr, nullptr, SW_SHOWNORMAL);
 }
 
 static void DrawAboutSheet(Graphics& g) {
@@ -1379,7 +1360,7 @@ static void DrawProcessSheet(Graphics& g) {
         bool prot = p.pid <= 4 || IsProtectedName(p.name);
         TextAt(g, nm, RectF(r.X + 10, r.Y, r.Width - 120, r.Height), f12,
                prot ? T.text3 : T.text, StringAlignmentNear, StringAlignmentCenter, true);
-        TextAt(g, HumanBytes(ProcPrivateWS(p)), RectF(r.GetRight() - 100, r.Y, 90, r.Height), f12b,
+        TextAt(g, FormatBytes(ProcPrivateWS(p)), RectF(r.GetRight() - 100, r.Y, 90, r.Height), f12b,
                prot ? T.text3 : T.text2, StringAlignmentFar);
         float ratio = (float)((double)ProcPrivateWS(p) / (double)maxWS);
         if (ratio > 0.02f) {
@@ -1709,17 +1690,11 @@ static void Activate(CtlId id) {
         OpenSheet(Sheet::About);
         break;
     case ID_ABOUT_REPO:
-        ShellExecuteW(nullptr, L"open", L"https://github.com/feiyu-labs/MemSweep",
-                      nullptr, nullptr, SW_SHOWNORMAL);
-        break;
+        OpenUrl(L"https://github.com/feiyu-labs/MemSweep"); break;
     case ID_ABOUT_ISSUES:
-        ShellExecuteW(nullptr, L"open", L"https://github.com/feiyu-labs/MemSweep/issues",
-                      nullptr, nullptr, SW_SHOWNORMAL);
-        break;
+        OpenUrl(L"https://github.com/feiyu-labs/MemSweep/issues"); break;
     case ID_ABOUT_UPDATES:
-        ShellExecuteW(nullptr, L"open", L"https://github.com/feiyu-labs/MemSweep/releases/latest",
-                      nullptr, nullptr, SW_SHOWNORMAL);
-        break;
+        OpenUrl(L"https://github.com/feiyu-labs/MemSweep/releases/latest"); break;
     case ID_ADV_BACK:
         CommitSettings();
         OpenSheet(Sheet::Settings);
@@ -1755,6 +1730,7 @@ static void Activate(CtlId id) {
         RECT rc{}; GetClientRect(g_hwnd, &rc);
         BuildLayout((float)rc.right, (float)rc.bottom, L.dpi);
         PositionEdits();
+        UpdateWhitelistCue();
         g_toast = Tx(L"已切换中文界面", L"Switched to English");
         g_lastToastMs = GetTickCount64();
         InvalidateRect(g_hwnd, nullptr, FALSE);
@@ -1789,23 +1765,6 @@ static void Activate(CtlId id) {
         g_savedAt = GetTickCount64();
         break;
     }
-    case ID_SEG_ZH:
-        if (!g_zh) {
-            g_zh = true; g_cfg.lang = L"zh"; SaveConfig(); CreateFonts();
-            RECT rc{}; GetClientRect(g_hwnd, &rc); BuildLayout((float)rc.right, (float)rc.bottom, L.dpi);
-            PositionEdits(); SetWindowTextW(g_hwnd, L"MemSweep"); InvalidateRect(g_hwnd, nullptr, FALSE);
-        }
-        break;
-    case ID_SEG_EN:
-        if (g_zh) {
-            g_zh = false; g_cfg.lang = L"en"; SaveConfig(); CreateFonts();
-            RECT rc{}; GetClientRect(g_hwnd, &rc); BuildLayout((float)rc.right, (float)rc.bottom, L.dpi);
-            PositionEdits(); SetWindowTextW(g_hwnd, L"MemSweep"); InvalidateRect(g_hwnd, nullptr, FALSE);
-        }
-        break;
-    case ID_SEG_THEME0: g_themeMode = 0; g_cfg.theme = L"auto"; SaveConfig(); ApplyTheme(); break;
-    case ID_SEG_THEME1: g_themeMode = 1; g_cfg.theme = L"light"; SaveConfig(); ApplyTheme(); break;
-    case ID_SEG_THEME2: g_themeMode = 2; g_cfg.theme = L"dark"; SaveConfig(); ApplyTheme(); break;
     default: break;
     }
     KickAnim();
@@ -1976,6 +1935,7 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             return h;
         };
         g_edWL = mkEdit(0);
+        UpdateWhitelistCue();
         g_edOldProc = (WNDPROC)SetWindowLongPtrW(g_edWL, GWLP_WNDPROC, (LONG_PTR)EditProc);
 
         SyncFromConfig();
@@ -2590,7 +2550,7 @@ static void DrawSystemSheet(Graphics& g) {
     wchar_t v[128];
     if (g_sys.compOk) {
         swprintf(v, 128, Tx(L"已开启 · %s · %.2f×", L"on · %s · %.2fx"),
-                 HumanBytes(g_sys.compBytes).c_str(), g_sys.compRatio);
+                 FormatBytes(g_sys.compBytes).c_str(), g_sys.compRatio);
     } else {
         wcscpy(v, g_sys.mmOk ? (g_sys.compression ? Tx(L"已开启", L"on") : Tx(L"已关闭", L"off"))
                              : Tx(L"未知", L"unknown"));
@@ -2607,7 +2567,7 @@ static void DrawSystemSheet(Graphics& g) {
     bool pfWarn = !(g_sys.pfInitMB >= 24576 && g_sys.pfMaxMB >= 65536);
     row(3, !pfWarn, L"页面文件", L"Pagefile", v, pfWarn);
     swprintf(v, 128, Tx(L"%s / %s · %.0f%%", L"%s / %s · %.0f%%"),
-             HumanBytes(g_sys.commitUsed).c_str(), HumanBytes(g_sys.commitLimit).c_str(), g_sys.commitPct);
+             FormatBytes(g_sys.commitUsed).c_str(), FormatBytes(g_sys.commitLimit).c_str(), g_sys.commitPct);
     row(4, g_sys.commitPct <= 90.0, L"已提交", L"Commit", v, g_sys.commitPct > 90.0);
 
     if (g_systemExpanded) {
@@ -2615,7 +2575,7 @@ static void DrawSystemSheet(Graphics& g) {
         row(6, !g_sys.fastStartupOn, L"快速启动", L"Fast startup",
             g_sys.fastStartupOn ? Tx(L"已开启", L"on") : Tx(L"已关闭", L"off"), g_sys.fastStartupOn);
         swprintf(v, 128, Tx(L"非分页 %s · 分页 %s", L"nonpaged %s · paged %s"),
-                 HumanBytes(g_sys.nonpaged).c_str(), HumanBytes(g_sys.paged).c_str());
+                 FormatBytes(g_sys.nonpaged).c_str(), FormatBytes(g_sys.paged).c_str());
         row(7, g_sys.nonpaged <= 1024ULL * MB, L"内核内存", L"Kernel memory", v, g_sys.nonpaged > 1024ULL * MB);
         row(8, true, L"WSL 内存回收", L"WSL memory reclaim",
             g_sys.wslEnabled ? Tx(L"可配置", L"available") : Tx(L"未启用", L"not enabled"), false);

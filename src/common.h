@@ -2,8 +2,8 @@
 #pragma once
 
 // 单一版本源：UI 关于页、诊断导出、日志共用；资源文件 res/app.rc 仍需手动同步。
-#define MEMSWEEP_VERSION      L"1.9.6"
-#define MEMSWEEP_VERSION_FULL L"1.9.6.0"
+#define MEMSWEEP_VERSION      L"1.9.7"
+#define MEMSWEEP_VERSION_FULL L"1.9.7.0"
 
 
 #define WIN32_LEAN_AND_MEAN
@@ -128,7 +128,6 @@ struct Config {
     int   cooldownSec       = 180;
     int   freeFloorMB       = 1500;    // 空闲(不含缓存)低于此值才考虑清待机
     int   standbyFloorMB    = 1024;    // 待机缓存低于此值不清（收益太小）
-    bool  hardFaultGuard    = true;    // 颠簸时跳过待机清理
 
     bool  purgeLow          = true;    // 自动/手动：低优先级待机
     bool  purgeFullManual   = true;    // 手动：全量待机

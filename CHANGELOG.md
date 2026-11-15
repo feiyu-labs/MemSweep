@@ -1,5 +1,31 @@
 # Changelog
 
+## v1.9.7 — 2026-11-16
+
+### 设置页做减法（用户反馈：页面拥挤）
+- 移除「界面」整块（主题 3 段 + 语言 2 段）：主题/语言只在标题栏快切，设置页不再重复。
+  腾出的 48px 全部分给分组留白——组间距从 6–10px 提到 14–22px，页面不再发闷。
+- 取舍：设置页不再提供「跟随系统」三选一；首次运行仍默认跟随系统，标题栏选择后固定为浅/深。
+
+### 保护名单可用性（用户反馈：不知道怎么写）
+- **真 bug**：原生 Edit 盖住了 GDI+ 占位符，实机上输入框是空的——说明文字只在离屏截图里存在。
+  改用系统 `EM_SETCUEBANNER`，空值时常驻显示示例「例如 chrome, idea64」，语言切换同步更新。
+- 说明改为「清理时跳过这些进程；虚拟机始终受保护」——用途 + 默认一次说清。
+
+### 代码质量 / 冗余清理（全量审查）
+- 删除死代码：`Theme::dark`、`Theme::divider`、`Layout::sheetHeader`、`Layout::advSilentRow`、
+  `StatCache::topNames`、`ID_SEG_*` 五个枚举与处理分支、`setTheme*`/`setLang*` 布局字段。
+- 删除永远为真的配置 `hardFaultGuard`（LoadConfig 一直强制 true）：读取/保存/Plan 分支与字段一并移除，
+  旧配置里的键被忽略，行为不变。
+- `HumanBytes` 别名合并到 `FormatBytes`；去掉重复的 `<cmath>`；关于页三个链接提取 `OpenUrl`；
+  `DrawIconButton` 的 `gear` 参数更名为 `settings`（它画的是滑杆）。
+- 复核后保留：`combinePages`（Plan 的显式输入，与力度联动）、`freeFloorMB/standbyFloorMB`
+  （策略阈值）、`allSessions`（会话过滤）。
+
+### 验证
+- `build.cmd test` PASS 零警告；安装版 `/selftest` PASS；设置页 2.0x 中英快照复核。
+- 393,728 字节；SHA256 `38A4AE898BCC9EC3E2C07D821A2228489622A4612382D57DFD2923322B74FE61`。
+
 ## v1.9.6 — 2026-11-16
 
 ### 品牌标记与软件图标统一

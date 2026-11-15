@@ -228,7 +228,6 @@ void LoadConfig() {
     g_cfg.cooldownSec     = ClampInt(getI(L"cooldownsec", 180), 30, 3600);
     g_cfg.freeFloorMB     = ClampInt(getI(L"freefloormb", 1500), 128, 32768);
     g_cfg.standbyFloorMB  = ClampInt(getI(L"standbyfloormb", 1024), 64, 32768);
-    g_cfg.hardFaultGuard  = getB(L"hardfaultguard", true);
     g_cfg.purgeLow        = getB(L"purgelow", true);
     g_cfg.purgeFullManual = getB(L"purgefullmanual", true);
     g_cfg.sysCache        = getB(L"syscache", true);
@@ -247,8 +246,7 @@ void LoadConfig() {
     g_cfg.autostart       = getB(L"autostart", false);
     g_cfg.silent          = getB(L"silent", false);
     g_cfg.allSessions     = getB(L"allsessions", false);
-    // 抖动保护是安全护栏，不作为用户可关闭项；历史配置里的 0 一律回到开启
-    g_cfg.hardFaultGuard  = true;
+    // 抖动保护是内置安全护栏（高缺页时跳过待机清理），不暴露开关，也不落盘。
     // v1.8.1 起合并页跟随「清理力度=深度」；老配置里的 0 自动升级，无需用户干预
     if (g_cfg.purgeFullManual && g_cfg.sysCache) g_cfg.combinePages = true;
     g_zh.store(g_cfg.lang != L"en", std::memory_order_relaxed);
@@ -271,7 +269,6 @@ void SaveConfig() {
     s += L"cooldownSec=" + std::to_wstring(c.cooldownSec) + L"\n";
     s += L"freeFloorMB=" + std::to_wstring(c.freeFloorMB) + L"\n";
     s += L"standbyFloorMB=" + std::to_wstring(c.standbyFloorMB) + L"\n";
-    s += std::wstring(L"hardFaultGuard=") + (c.hardFaultGuard ? L"1" : L"0") + L"\n\n";
     s += L"[clean]\n";
     s += std::wstring(L"purgeLow=") + (c.purgeLow ? L"1" : L"0") + L"\n";
     s += std::wstring(L"purgeFullManual=") + (c.purgeFullManual ? L"1" : L"0") + L"\n";
@@ -712,7 +709,7 @@ CleanPlan PlanAuto(const Config& c, const Metrics& m, bool hasCandidates) {
         p.requireIdle = !severe;
     }
     if (c.purgeLow && enoughStandby && (lowFree || severe)) {
-        const bool hfOk = !c.hardFaultGuard || g_hfPerSec.load(std::memory_order_relaxed) < 4000.0 || severe;
+        const bool hfOk = g_hfPerSec.load(std::memory_order_relaxed) < 4000.0 || severe;
         if (hfOk) {
             // 只有真正枯竭才全量清缓存；高负载但仍有可用页时保留高优先级缓存，
             // 避免每次冷却结束都重复清空、让缓存永远无法预热。

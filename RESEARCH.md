@@ -833,3 +833,29 @@ v1.9.4.0，369,664 字节，SHA256 `D0B91D3B79EB8C00D5A1C3D24101E3A1F11FF7EC86AA
 内容只放“身份 + 版本 + 三个外链 + 许可/隐私”，不做检查更新请求（应用不联网），
 “检查更新”用系统浏览器打开 releases/latest。
 
+## 二十五、v1.9.7 设置页减法与保护名单（2026-11-16 第十六轮）
+
+### 1. 设置页拥挤的量化
+
+v1.9.6 的设置页有 9 组、组间距 6–10px（力度说明→保护名单只有 6px）。「界面」块
+（主题 3 段 + 语言 2 段）与标题栏快切完全重复。移除后释放 48px，全部转为留白：
+组间距 14–22px，页面从“排满”变成“分组”。
+
+代价：设置页不再有「跟随系统」；首次运行仍按系统主题初始化，标题栏选择后固定为浅/深。
+如果未来要恢复，应放进高级设置，而不是再加回主设置页。
+
+### 2. 保护名单占位符为什么实机看不到
+
+`DrawEditBox` 在 GDI+ 层画了占位符，但原生 `Edit` 子窗口位于其上方并填充自己的背景，
+把占位符完全盖住；`/uipng` 快照里 `PositionEdits` 隐藏了 Edit，所以截图看起来正常。
+修复：`EM_SETCUEBANNER(TRUE, L"例如 chrome, idea64")`，语言切换时重设。
+文案改为“清理时跳过这些进程；虚拟机始终受保护”（用途 + 默认）。
+
+### 3. 代码审计结果
+
+死代码：`Theme::dark/divider`、`Layout::sheetHeader/advSilentRow`、`StatCache::topNames`、
+`ID_SEG_*` 及分支、`setTheme*/setLang*` 字段、`HumanBytes` 别名、重复 `<cmath>`。
+永远为真的配置 `hardFaultGuard`（LoadConfig 强制 true）一并删除，旧键忽略、行为不变。
+保留 `combinePages`（Plan 显式输入）、`freeFloorMB/standbyFloorMB`（策略阈值）、
+`allSessions`（会话过滤）——它们都有实际读取点。
+
