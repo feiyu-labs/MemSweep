@@ -1,14 +1,25 @@
-MemSweep 内存速清
-==================
+MemSweep
+========
 
-1. 右键 install.cmd -> 以管理员身份运行
+English
+-------
+1. Right-click install.cmd -> Run as administrator.
+   Installs to C:\Program Files\MemSweep and registers a logon task plus a desktop shortcut.
+2. Tray icon: left-click opens the panel, right-click for the menu, middle-click cleans instantly.
+   Global hotkey: Ctrl+Shift+M
+3. Uninstall: right-click uninstall.cmd -> Run as administrator.
+   Settings and logs stay in %APPDATA%\MemSweep (delete the folder to remove them).
+
+简体中文
+-------
+1. 右键 install.cmd -> 以管理员身份运行。
    安装到 C:\Program Files\MemSweep，并创建开机计划任务与桌面快捷方式。
 2. 托盘出现图标：左键打开面板，右键菜单，中键秒清。
    全局热键：Ctrl+Shift+M
 3. 卸载：右键 uninstall.cmd -> 以管理员身份运行。
    配置与日志保留在 %APPDATA%\MemSweep（如需彻底清除请手动删除）。
 
-源码 / 反馈 / 更新：
+Source / Issues / Releases:
 https://github.com/feiyu-labs/MemSweep
 
-许可证：MIT
+License: MIT

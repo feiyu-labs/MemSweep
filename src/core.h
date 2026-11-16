@@ -1,4 +1,4 @@
-// MemSweep · 内存速清 — 核心引擎接口
+// MemSweep — 核心引擎接口
 #pragma once
 #include "common.h"
 

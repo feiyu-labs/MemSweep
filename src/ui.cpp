@@ -1,4 +1,4 @@
-// MemSweep · 内存速清 — 现代自绘 UI（GDI+）
+// MemSweep — 现代自绘 UI（GDI+）
 #include "ui.h"
 #include "core.h"
 

@@ -1,4 +1,4 @@
-// MemSweep · 内存速清 — 入口
+// MemSweep — 入口
 #include "core.h"
 #include "ui.h"
 
@@ -195,7 +195,7 @@ int APIENTRY wWinMain(HINSTANCE hInst, HINSTANCE, PWSTR, int) {
         Log(L"[dev] running unelevated (UI only, clean actions will fail)");
 #else
         MessageBoxW(nullptr,
-                    Tx(L"内存速清需要管理员权限才能清理内核内存。\n请右键「以管理员身份运行」。",
+                    Tx(L"MemSweep 需要管理员权限才能清理内核内存。\n请右键「以管理员身份运行」。",
                        L"MemSweep requires administrator privileges.\nPlease run as administrator."),
                     L"MemSweep", MB_ICONWARNING);
         return 1;

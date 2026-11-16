@@ -1,4 +1,4 @@
-// MemSweep · 内存速清 — UI 接口
+// MemSweep — UI 接口
 #pragma once
 #include "common.h"
 

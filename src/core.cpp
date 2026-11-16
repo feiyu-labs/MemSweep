@@ -1,4 +1,4 @@
-// MemSweep · 内存速清 — 核心引擎实现
+// MemSweep — 核心引擎实现
 #include "core.h"
 #include <array>
 

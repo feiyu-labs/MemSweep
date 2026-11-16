@@ -1,4 +1,4 @@
-// MemSweep · 内存速清 — 公共定义
+// MemSweep — 公共定义
 #pragma once
 
 // 单一版本源：UI 关于页、诊断导出、日志共用；资源文件 res/app.rc 仍需手动同步。
