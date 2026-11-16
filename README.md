@@ -68,6 +68,8 @@ Automatic cleaning runs only when memory use is above your threshold **and** the
 
 When an automatic pass actually reclaims something (64 MB or more) the tray reports it — at most once every ten minutes, never while the panel is open, and never in silent mode. Passes that find nothing to do stay completely quiet, and the line under the button says whether the last run was automatic or one you started.
 
+Notifications are suppressed entirely whenever Windows reports that the user is not accepting them — a fullscreen game, presentation mode, Focus Assist — and also when the foreground window covers a whole monitor, which catches borderless fullscreen games that still report "accepts notifications". Nothing is queued while you are away; the tray tooltip and the panel line carry the information instead, and automatic-clean notifications are silent.
+
 ### It leaves what you are using alone
 
 The focused window, its parent process chain, anything that had focus in the last two minutes, and critical system and virtualisation services are never trimmed. Neither are processes that were active in the last five minutes: only background processes with a working set above 128 MB and near-zero CPU time are candidates. A process is not trimmed twice within ten minutes unless it has grown by half again.
@@ -125,7 +127,7 @@ The combination is validated against Windows rather than guessed: a missing modi
 
 ## Install
 
-Download `MemSweep-v1.9.13-x64.zip` or `MemSweep-v1.9.13-arm64.zip` from [Releases](https://github.com/feiyu-labs/MemSweep/releases/latest), extract it, then right-click `install.cmd` and choose **Run as administrator**.
+Download `MemSweep-v1.9.14-x64.zip` or `MemSweep-v1.9.14-arm64.zip` from [Releases](https://github.com/feiyu-labs/MemSweep/releases/latest), extract it, then right-click `install.cmd` and choose **Run as administrator**.
 
 The script copies `MemSweep.exe` to `C:\Program Files\MemSweep\`, registers a logon scheduled task with the highest privileges available (so startup never shows a UAC prompt), creates a desktop shortcut and starts MemSweep in the tray.
 

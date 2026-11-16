@@ -653,6 +653,14 @@ static void TrayUpdate(bool force) {
                        Tx(L"可用 ", L"free ") + FormatBytes(avail) +
                        L" · " + Tx(L"已缓存 ", L"cached ") + FormatBytes(standby) +
                        L" · " + Tx(L"提交 ", L"commit ") + ct;
+    // 轻度反馈渠道：悬停即可看到上次清理，不需要任何弹窗去挡屏幕
+    if (ULONGLONG last = g_lastCleanTickMs.load()) {
+        ULONGLONG ago = (GetTickCount64() - last) / 1000;
+        wchar_t when[32];
+        if (ago < 3600) swprintf(when, 32, Tx(L"%llu 分钟前", L"%llum ago"), (unsigned long long)(ago / 60));
+        else swprintf(when, 32, Tx(L"%llu 小时前", L"%lluh ago"), (unsigned long long)(ago / 3600));
+        tip += L" · " + std::wstring(Tx(L"上次清理 ", L"cleaned ")) + when;
+    }
     wcsncpy(g_nid.szTip, tip.c_str(), 127);
     Shell_NotifyIconW(g_trayOn ? NIM_MODIFY : NIM_ADD, &g_nid);
     g_trayOn = true;
@@ -664,8 +672,34 @@ static void TrayRemove() {
     }
     if (g_trayIcon) { DestroyIcon(g_trayIcon); g_trayIcon = nullptr; }
 }
+// 无边框全屏（很多现代游戏就是这样）不会让系统进入“全屏”状态，
+// 所以再补一层几何判断：前台窗口铺满它所在显示器，就当作不该打扰。
+static bool ForegroundCoversMonitor() {
+    HWND fg = GetForegroundWindow();
+    if (!fg || fg == g_hwnd) return false;
+    wchar_t cls[64] = {};
+    if (!GetClassNameW(fg, cls, 64)) return false;
+    if (!wcscmp(cls, L"Progman") || !wcscmp(cls, L"WorkerW") || !wcscmp(cls, L"Shell_TrayWnd"))
+        return false;   // 桌面/任务栏不算
+    RECT r{};
+    if (!GetWindowRect(fg, &r)) return false;
+    MONITORINFO mi{};
+    mi.cbSize = sizeof(mi);
+    if (!GetMonitorInfoW(MonitorFromWindow(fg, MONITOR_DEFAULTTONEAREST), &mi)) return false;
+    return r.left <= mi.rcMonitor.left && r.top <= mi.rcMonitor.top &&
+           r.right >= mi.rcMonitor.right && r.bottom >= mi.rcMonitor.bottom;
+}
+
+// 全屏游戏 / 演示模式 / 免打扰时段一律不弹：宁可这一条不说，也不挡画面。
+static bool NotificationsAllowed() {
+    QUERY_USER_NOTIFICATION_STATE st{};
+    if (SUCCEEDED(SHQueryUserNotificationState(&st)) && !NotificationStateAllows(st)) return false;
+    return !ForegroundCoversMonitor();
+}
+
 static void Balloon(const std::wstring& text, DWORD flags = NIIF_INFO) {
     if (!g_trayOn) return;
+    if (!NotificationsAllowed()) return;
     NOTIFYICONDATAW n = g_nid;
     n.uFlags = NIF_INFO;
     wcsncpy(n.szInfo, text.c_str(), 255);
@@ -2598,7 +2632,8 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     case WM_APP_SHOW: BringMainToFront(); return 0;
     case WM_APP_BALLOON: {
         std::wstring* s = (std::wstring*)lp;
-        if (s) { Balloon(*s); delete s; }
+        // wp=1 表示自动清理：静音提示，内存清理不值得一声响
+        if (s) { Balloon(*s, wp ? (NIIF_INFO | NIIF_NOSOUND) : NIIF_INFO); delete s; }
         return 0;
     }
     case WM_APP_TRAY: {

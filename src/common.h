@@ -2,8 +2,8 @@
 #pragma once
 
 // 单一版本源：UI 关于页、诊断导出、日志共用；资源文件 res/app.rc 仍需手动同步。
-#define MEMSWEEP_VERSION      L"1.9.13"
-#define MEMSWEEP_VERSION_FULL L"1.9.13.0"
+#define MEMSWEEP_VERSION      L"1.9.14"
+#define MEMSWEEP_VERSION_FULL L"1.9.14.0"
 
 
 #define WIN32_LEAN_AND_MEAN
@@ -213,6 +213,13 @@ inline bool ShouldNotifyAutoClean(unsigned long long gain, unsigned long long si
     if (silent || windowVisible) return false;
     if (gain < kAutoNotifyMinGain) return false;
     return sinceLastNotifyMs >= kAutoNotifyGapMs;
+}
+
+// 系统通知状态只放行“用户此刻接受通知”这一种：全屏游戏、演示模式、勿扰时段、
+// 全屏应用都一律不弹，宁可不报也不挡画面。SHQueryUserNotificationState 是 Windows
+// 为此提供的标准接口，Explorer 自己也用它。
+inline bool NotificationStateAllows(QUERY_USER_NOTIFICATION_STATE st) {
+    return st == QUNS_ACCEPTS_NOTIFICATIONS;
 }
 
 

@@ -1018,7 +1018,7 @@ static DWORD WINAPI CleanThreadProc(LPVOID param) {
         else
             swprintf(info, 320, Tx(L"清理完成，可用 %s", L"Done, %s available"),
                      FormatBytes(r.availAfter).c_str());
-        PostMessageW(g_hwnd, WM_APP_BALLOON, 0, (LPARAM)new std::wstring(info));
+        PostMessageW(g_hwnd, WM_APP_BALLOON, isAuto ? 1 : 0, (LPARAM)new std::wstring(info));
         if (isAuto) g_lastAutoNotifyMs.store(GetTickCount64());
     }
     if (g_hwnd) {
@@ -1518,6 +1518,12 @@ bool SelfTest() {
         chk(!ShouldNotifyAutoClean(128ULL * MB, 60 * 1000, false, false), L"auto notify respects gap");
         chk(!ShouldNotifyAutoClean(128ULL * MB, gap, true, false), L"auto notify quiet when panel visible");
         chk(!ShouldNotifyAutoClean(128ULL * MB, gap, false, true), L"auto notify quiet in silent mode");
+        chk(NotificationStateAllows(QUNS_ACCEPTS_NOTIFICATIONS), L"notify allowed when user accepts");
+        chk(!NotificationStateAllows(QUNS_RUNNING_D3D_FULL_SCREEN) &&
+            !NotificationStateAllows(QUNS_BUSY) &&
+            !NotificationStateAllows(QUNS_QUIET_TIME) &&
+            !NotificationStateAllows(QUNS_PRESENTATION_MODE),
+            L"notify blocked for fullscreen/busy/quiet/presenting");
     }
 
     Log(L"[selftest] %s", ok ? L"PASS" : L"FAIL");
