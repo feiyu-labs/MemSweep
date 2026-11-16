@@ -181,5 +181,6 @@ build.cmd test     :: dev + /selftest + /idlecheck + /uipng + /checkpng
 - [ ] 主屏/设置/系统 Sheet Private < 20MB，Ping < 50ms（150% DPI）
 - [ ] Sheet 200ms 后无额外位图/定时器，空闲无持续 60fps
 - [ ] 安装版 SHA256 与 dist 一致
-- [ ] `docs/release-notes/<tag>.md` 已写（英文在前、中文在后）；`release.yml` 优先用它，缺失才退回自动生成
+- [ ] `docs/release-notes/<tag>.md` 已写：按 `_TEMPLATE.md` 的三条规矩——一句话概述 + 3–5 条用户可见变化、
+  不写实现细节/包体/测试结果、英文在前中文在后；`release.yml` 优先用它，缺失才退回自动生成
 - [ ] README/CHANGELOG/RESEARCH/ENGINEERING 更新
