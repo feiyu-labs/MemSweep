@@ -124,6 +124,7 @@ struct CombineResult {
 bool CombinePages(CombineResult& out, DWORD timeoutMs = 60000, HANDLE externalCancel = nullptr);
 bool TrimPid(DWORD pid);
 bool IsProtectedName(const std::wstring& name);
+bool IsBuiltinProtectedName(const std::wstring& name);
 
 struct CleanResult {
     bool standbyLow = false, standbyFull = false, cache = false;

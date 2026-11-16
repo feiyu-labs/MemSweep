@@ -12,6 +12,7 @@
 #include <string>
 #include <vector>
 #include <unordered_map>
+#include <algorithm>
 
 using namespace Gdiplus;
 
@@ -153,9 +154,9 @@ enum CtlId {
     ID_TG_AUTO, ID_TG_HOTKEY, ID_TG_ECO, ID_TG_AUTOSTART, ID_TG_SILENT, ID_TG_IDLE_DEEP,
     ID_SL_THRESH,
     ID_SYS_MC, ID_SYS_PC, ID_SYS_PF, ID_SYS_WSL, ID_SYS_EXPORT, ID_SYS_MORE,
-    ID_SET_ADVANCED, ID_ADV_BACK, ID_SET_ABOUT,
+    ID_SET_ADVANCED, ID_ADV_BACK, ID_SET_ABOUT, ID_SET_PROTECTED,
     ID_ABOUT_REPO, ID_ABOUT_ISSUES, ID_ABOUT_UPDATES,
-    ID_TOP5_BASE = 2400,
+    ID_PROC_BASE = 2400,
     ID_ED_WL = 2500,
     ID_SET_COOL_BASE = 2510, ID_SET_STRENGTH_BASE = 2520,
     ID_ADV_MINWS_BASE = 2530, ID_ADV_IDLE_BASE = 2540
@@ -183,6 +184,7 @@ static ULONGLONG g_lastAmbientMs = 0;
 // 单主屏 + 一层 Sheet
 static Sheet g_sheet = Sheet::None;
 static bool g_sheetAnimating = false;
+static bool g_procFromSettings = false;   // 进程表从设置页进入时显示返回箭头
 static float g_sheetT = 1.0f;
 static ULONGLONG g_sheetStart = 0;
 static bool g_systemExpanded = false;
@@ -272,10 +274,11 @@ struct Layout {
     RectF setAutoRow, setThreshLbl, setThresh, setThreshVal;
     RectF setCoolLbl, setCoolSeg[4], setStrengthLbl, setStrengthSeg[3], setStrengthHint;
     RectF setWlLbl, setWlEdit, setWlHint, setAutostartRow, setSilentRow;
-    RectF setAdvancedRow, setAboutLink;
+    RectF setAdvancedRow, setAboutLink, setWlManage;
 
     // 关于
     RectF aboutLogo, aboutTitle, aboutVer, aboutDesc, aboutRows[3], aboutFoot;
+
 
     // 高级
     RectF advMinLbl, advMinSeg[3], advIdleLbl, advIdleSeg[3];
@@ -283,7 +286,7 @@ struct Layout {
     RectF advIdleDeepRow, advBack;
 
     // 进程
-    RectF procRows[5], procHint;
+    RectF procRows[8], procHint, procSub;
 
     // 系统
     RectF sysSummary, sysRows[9], sysMore, sysBtn[5];
@@ -308,7 +311,7 @@ static void BuildLayout(float w, float h, float dpi) {
 
     float sh = L.h - 32;
     if (g_sheet == Sheet::Advanced) sh = 380;
-    else if (g_sheet == Sheet::Processes) sh = 340;
+    else if (g_sheet == Sheet::Processes) sh = 460;
     else if (g_sheet == Sheet::System) sh = g_systemExpanded ? 520 : 360;
     else if (g_sheet == Sheet::About) sh = 360;
     L.sheet = RectF(16, (L.h - sh) / 2, L.w - 32, sh);
@@ -384,6 +387,7 @@ static void BuildLayout(float w, float h, float dpi) {
         L.setAutostartRow = RectF(bx, 418, bw, 34); AddHit(ID_TG_AUTOSTART, K_TOGGLE, L.setAutostartRow);
         L.setSilentRow = RectF(bx, 466, bw, 34); AddHit(ID_TG_SILENT, K_TOGGLE, L.setSilentRow);
 
+        L.setWlManage = RectF(bx + bw - 96, 330, 96, 20); AddHit(ID_SET_PROTECTED, K_BUTTON, L.setWlManage);
         L.setAboutLink = RectF(bx, 532, 150, 34); AddHit(ID_SET_ABOUT, K_BUTTON, L.setAboutLink);
         L.setAdvancedRow = RectF(bx + 158, 532, bw - 158, 34);
         AddHit(ID_SET_ADVANCED, K_BUTTON, L.setAdvancedRow);
@@ -427,11 +431,14 @@ static void BuildLayout(float w, float h, float dpi) {
 
     if (g_sheet == Sheet::Processes) {
         const float sy = L.sheet.Y;
-        for (int i = 0; i < 5; i++) {
-            L.procRows[i] = RectF(bx, sy + 54 + i * 44, bw, 40);
-            AddHit((CtlId)(ID_TOP5_BASE + i), K_BUTTON, L.procRows[i]);
+        L.advBack = RectF(L.sheet.X + 16, sy + 10, 32, 32);
+        if (g_procFromSettings) AddHit(ID_ADV_BACK, K_TITLEBTN, L.advBack);
+        L.procSub = RectF(bx, sy + 50, bw, 16);
+        for (int i = 0; i < 8; i++) {
+            L.procRows[i] = RectF(bx, sy + 84 + i * 40, bw, 38);
+            AddHit((CtlId)(ID_PROC_BASE + i), K_BUTTON, L.procRows[i]);
         }
-        L.procHint = RectF(bx, sy + 286, bw, 18);
+        L.procHint = RectF(bx, sy + 414, bw, 16);
         return;
     }
 
@@ -483,8 +490,6 @@ static Bitmap* g_back = nullptr;
 static Graphics* g_backG = nullptr;
 static int g_backW = 0, g_backH = 0;
 static ULONGLONG g_hiddenAt = 0;
-static ProcInfo g_top5[5];
-static int g_top5Count = 0;
 
 static ULONG_PTR g_gdiToken = 0;
 static void InitGdiplus() {
@@ -994,27 +999,7 @@ static unsigned long long ProcPrivateWS(const ProcInfo& p) {
     return p.wsPrivate ? p.wsPrivate : p.ws;
 }
 
-// Top5 与任务管理器一致，按私有工作集排序；总 WS 仍用于修剪决策。
-// 固定 5 槽插入，避免每帧分配/排序 500 个进程。
-static void RefreshTop5() {
-    g_top5Count = 0;
-    for (const auto& p : g_drawSnap.procs) {
-        if (p.pid <= 4 || p.pid == GetCurrentProcessId()) continue;
-        unsigned long long key = ProcPrivateWS(p);
-        int pos = g_top5Count;
-        while (pos > 0 && ProcPrivateWS(g_top5[pos - 1]) < key) {
-            if (pos < 5) g_top5[pos] = g_top5[pos - 1];
-            --pos;
-        }
-        if (pos < 5) {
-            g_top5[pos] = p;
-            if (g_top5Count < 5) ++g_top5Count;
-        }
-    }
-}
-
 static void DrawHome(Graphics& g) {
-    RefreshTop5();
     const Metrics& m = g_drawSnap.m;
     bool cleaning = g_cleaning != 0;
     bool tidying = cleaning && g_cleanPhase == 2;
@@ -1189,14 +1174,8 @@ static void DrawHome(Graphics& g) {
     }
     TextAt(g, last, L.lastClean, f11, T.text3);
 
-    {
-        wchar_t procLink[64];
-        if (g_top5Count > 0)
-            swprintf(procLink, 64, Tx(L"内存占用前 %d ›", L"Top %d by memory ›"), g_top5Count);
-        else
-            wcscpy(procLink, Tx(L"内存占用 ›", L"Memory use ›"));
-        TextAt(g, procLink, L.linkProcess, f12, g_hover == ID_HOME_PROCESS ? T.accent : T.text2);
-    }
+    TextAt(g, Tx(L"进程 ›", L"Processes ›"), L.linkProcess, f12,
+           g_hover == ID_HOME_PROCESS ? T.accent : T.text2);
     TextAt(g, Tx(L"系统状态", L"System status") + std::wstring(L" ›"),
            L.linkSystem, f12, g_hover == ID_HOME_SYSTEM ? T.accent : T.text2, StringAlignmentFar);
 }
@@ -1221,6 +1200,151 @@ static void DrawSheetFrame(Graphics& g, const wchar_t* titleZh, const wchar_t* t
                f11, T.accent, StringAlignmentFar);
     }
     DrawIconButton(g, L.sheetClose, ID_SHEET_CLOSE, true, false);
+}
+
+static void RefreshDrawSnap();
+
+enum class ProcState { Normal, Protected, Builtin };
+struct ProcRow { std::wstring name, display; unsigned long long ws = 0; DWORD pid = 0; ProcState st = ProcState::Normal; };
+static std::vector<ProcRow> g_procList;
+static int g_procScroll = 0;
+
+// 一张表同时承担：查看内存占用 / 切换保护 / 右键释放。
+// 名字按精确名去 .exe、小写；系统与 VM 内置保护显示为锁，不可切换。
+static void BuildProcessRows() {
+    std::unordered_map<std::wstring, ProcRow> byName;
+    for (const auto& p : g_drawSnap.procs) {
+        if (p.pid <= 4 || p.pid == GetCurrentProcessId() || p.name.empty()) continue;
+        std::wstring n = ToLower(p.name);
+        if (n.size() > 4 && n.compare(n.size() - 4, 4, L".exe") == 0) n.resize(n.size() - 4);
+        if (n.empty()) continue;
+        unsigned long long w = ProcPrivateWS(p);
+        auto it = byName.find(n);
+        if (it == byName.end() || w > it->second.ws) {
+            ProcRow r;
+            r.name = n; r.ws = w; r.pid = p.pid;
+            r.display = p.name;
+            if (r.display.size() > 4 &&
+                _wcsicmp(r.display.c_str() + r.display.size() - 4, L".exe") == 0)
+                r.display.resize(r.display.size() - 4);
+            r.st = IsBuiltinProtectedName(n) ? ProcState::Builtin : ProcState::Normal;
+            byName[n] = r;
+        }
+    }
+    for (auto n : SplitCSV(g_cfg.whitelist)) {
+        if (n.size() > 4 && n.compare(n.size() - 4, 4, L".exe") == 0) n.resize(n.size() - 4);
+        if (n.empty()) continue;
+        auto it = byName.find(n);
+        if (it != byName.end()) {
+            if (it->second.st != ProcState::Builtin) it->second.st = ProcState::Protected;
+        } else {
+            ProcRow r;
+            r.name = n; r.display = n; r.st = ProcState::Protected;   // 未运行但已保护，排最后
+            byName[n] = r;
+        }
+    }
+    g_procList.clear();
+    g_procList.reserve(byName.size());
+    for (auto& kv : byName) g_procList.push_back(kv.second);
+    // 切换保护不改变排序，避免行在鼠标下跳走
+    std::sort(g_procList.begin(), g_procList.end(), [](const ProcRow& a, const ProcRow& b) {
+        if (a.ws != b.ws) return a.ws > b.ws;
+        return a.name < b.name;
+    });
+}
+
+static void CommitWhitelist(std::vector<std::wstring> v) {
+    std::wstring joined;
+    for (size_t i = 0; i < v.size(); i++) {
+        if (i) joined += L", ";
+        joined += v[i];
+    }
+    g_cfg.whitelist = joined;
+    g_wlDraft = joined;
+    SaveConfig();
+    RebuildWhitelist();
+    if (g_edWL) SetWindowTextW(g_edWL, joined.c_str());
+    g_savedAt = GetTickCount64();
+    InvalidateRect(g_hwnd, nullptr, FALSE);
+}
+
+static void ToggleProtected(const std::wstring& name) {
+    std::wstring n = ToLower(TrimW(name));
+    if (n.size() > 4 && n.compare(n.size() - 4, 4, L".exe") == 0) n.resize(n.size() - 4);
+    if (n.empty()) return;
+    std::vector<std::wstring> v = SplitCSV(g_cfg.whitelist);
+    for (auto& e : v) {
+        if (e.size() > 4 && e.compare(e.size() - 4, 4, L".exe") == 0) e.resize(e.size() - 4);
+    }
+    auto it = std::find(v.begin(), v.end(), n);
+    if (it != v.end()) v.erase(it);
+    else v.push_back(n);
+    CommitWhitelist(std::move(v));
+}
+
+static void DrawProcessSheet(Graphics& g) {
+    DrawSheetFrame(g, L"进程", L"Processes", g_procFromSettings);
+    RefreshDrawSnap();
+    BuildProcessRows();
+    int protCount = 0;
+    for (const auto& r : g_procList) if (r.st == ProcState::Protected) protCount++;
+    wchar_t sub[160];
+    if (protCount)
+        swprintf(sub, 160, Tx(L"点击切换保护 · 右键释放内存 · 已保护 %d 个",
+                              L"Click to protect · right-click to free · %d protected"), protCount);
+    else
+        wcscpy(sub, Tx(L"点击切换保护 · 右键释放内存", L"Click to protect · right-click to free"));
+    TextAt(g, sub, L.procSub, f11, T.text3);
+
+    const int total = (int)g_procList.size();
+    const int maxScroll = std::max(0, total - 8);
+    if (g_procScroll > maxScroll) g_procScroll = maxScroll;
+    if (g_procScroll < 0) g_procScroll = 0;
+    for (int i = 0; i < 8; i++) {
+        int idx = g_procScroll + i;
+        if (idx >= total) break;
+        const ProcRow& r = g_procList[idx];
+        const RectF& box = L.procRows[i];
+        bool hv = g_hover == (int)(ID_PROC_BASE + i);
+        if (hv) FillRound(g, box, 8, T.trackFill);
+        Color nameColor = (r.st == ProcState::Builtin) ? T.text3 : T.text;
+        TextAt(g, r.display, RectF(box.X + 12, box.Y, box.Width - 168, box.Height), f12, nameColor,
+               StringAlignmentNear, StringAlignmentCenter, true);
+        if (r.ws)
+            TextAt(g, FormatBytes(r.ws), RectF(box.GetRight() - 142, box.Y, 96, box.Height),
+                   f11, T.text3, StringAlignmentFar);
+        else
+            TextAt(g, Tx(L"未运行", L"not running"), RectF(box.GetRight() - 152, box.Y, 106, box.Height),
+                   f11, T.text3, StringAlignmentFar);
+
+        float cx = box.GetRight() - 26, cy = box.Y + box.Height / 2;
+        if (r.st == ProcState::Builtin) {
+            Pen lp(T.text3, 1.5f);
+            GraphicsPath body;
+            AddRound(body, RectF(cx - 5.5f, cy - 2.5f, 11, 8), 2);
+            g.DrawPath(&lp, &body);
+            g.DrawArc(&lp, RectF(cx - 4.5f, cy - 8.5f, 9, 11), 180, 180);
+        } else if (r.st == ProcState::Protected) {
+            SolidBrush fill(T.accent);
+            g.FillEllipse(&fill, RectF(cx - 8, cy - 8, 16, 16));
+            Pen cp(C(255, 255, 255, 255), 1.8f);
+            cp.SetStartCap(LineCapRound); cp.SetEndCap(LineCapRound);
+            g.DrawLine(&cp, cx - 4, cy, cx - 1, cy + 3);
+            g.DrawLine(&cp, cx - 1, cy + 3, cx + 4, cy - 3);
+        } else {
+            Pen ring(T.text3, 1.5f);
+            g.DrawEllipse(&ring, RectF(cx - 7, cy - 7, 14, 14));
+        }
+    }
+    if (total > 8) {
+        float top = L.procRows[0].Y, h = L.procRows[7].GetBottom() - top;
+        float th = std::max(24.0f, h * 8.0f / (float)total);
+        float ty = top + (h - th) * (float)g_procScroll / (float)std::max(1, maxScroll);
+        FillRound(g, RectF(L.sheet.GetRight() - 14, top, 3, h), 1.5f, T.track);
+        FillRound(g, RectF(L.sheet.GetRight() - 14, ty, 3, th), 1.5f, T.text3);
+    }
+    TextAt(g, Tx(L"滚轮浏览 · 数值为专用工作集", L"Scroll · values are private working set"),
+           L.procHint, f11, T.text3);
 }
 
 static void DrawSettingsSheet(Graphics& g) {
@@ -1253,6 +1377,10 @@ static void DrawSettingsSheet(Graphics& g) {
     TextAt(g, Tx(hintZh, hintEn), L.setStrengthHint, f11, T.text3);
 
     TextAt(g, Tx(L"保护名单", L"Protected list"), L.setWlLbl, f12, T.text2);
+    bool protHover = g_hover == ID_SET_PROTECTED;
+    TextAt(g, Tx(L"选择应用 ›", L"Choose apps ›"), RectF(L.setWlManage.X, L.setWlManage.Y,
+           L.setWlManage.Width, L.setWlManage.Height), f11,
+           protHover ? T.accent : T.text3, StringAlignmentFar);
     DrawEditBox(g, L.setWlEdit, EditValue(g_edWL, g_cfg.whitelist.c_str()));
     TextAt(g, Tx(L"清理时跳过这些进程；虚拟机始终受保护", L"Skipped when cleaning; VMs are always protected"),
            L.setWlHint, f11, T.text3);
@@ -1341,37 +1469,6 @@ static void DrawAboutSheet(Graphics& g) {
            L.aboutFoot, f11, T.text3, StringAlignmentCenter);
 }
 
-static void DrawProcessSheet(Graphics& g) {
-    DrawSheetFrame(g, L"内存占用前 5", L"Top 5 by memory", false);
-    if (g_top5Count == 0) {
-        TextAt(g, Tx(L"暂无数据", L"No data"), L.procRows[0], f12, T.text3);
-        return;
-    }
-    unsigned long long maxWS = 0;
-    for (int i = 0; i < g_top5Count; i++) maxWS = std::max(maxWS, ProcPrivateWS(g_top5[i]));
-    if (!maxWS) maxWS = 1;
-    for (int i = 0; i < g_top5Count; i++) {
-        const ProcInfo& p = g_top5[i];
-        RectF r = L.procRows[i];
-        bool hv = g_hover == (int)(ID_TOP5_BASE + i);
-        if (hv) FillRound(g, r, 8, T.trackFill);
-        std::wstring nm = p.name;
-        if (nm.size() > 4 && _wcsicmp(nm.c_str() + nm.size() - 4, L".exe") == 0) nm.resize(nm.size() - 4);
-        bool prot = p.pid <= 4 || IsProtectedName(p.name);
-        TextAt(g, nm, RectF(r.X + 10, r.Y, r.Width - 120, r.Height), f12,
-               prot ? T.text3 : T.text, StringAlignmentNear, StringAlignmentCenter, true);
-        TextAt(g, FormatBytes(ProcPrivateWS(p)), RectF(r.GetRight() - 100, r.Y, 90, r.Height), f12b,
-               prot ? T.text3 : T.text2, StringAlignmentFar);
-        float ratio = (float)((double)ProcPrivateWS(p) / (double)maxWS);
-        if (ratio > 0.02f) {
-            FillRound(g, RectF(r.X, r.GetBottom() - 3, r.Width * ratio, 2), 1,
-                      C(g_dark ? 40 : 22, T.accent.GetR(), T.accent.GetG(), T.accent.GetB()));
-        }
-    }
-    TextAt(g, Tx(L"右键：释放内存 / 保护 · 数值为专用工作集", L"Right-click: free / protect · private working set"),
-           L.procHint, f11, T.text3);
-}
-
 static float ToggleValue(int id, bool on) {
     auto it = g_anim.find(id);
     return it == g_anim.end() ? (on ? 1.0f : 0.0f) : it->second;
@@ -1390,6 +1487,14 @@ static void DrawToast(Graphics& g) {
     TextAt(g, g_toast, tr, f12b, C(alpha, 235, 238, 243), StringAlignmentCenter);
 }
 
+static void RefreshDrawSnap() {
+    if (!g_drawDirty) return;
+    EnterCriticalSection(&g_lock);
+    g_drawSnap = g_snap;
+    LeaveCriticalSection(&g_lock);
+    g_drawDirty = false;
+}
+
 static void DrawAll(Graphics& g, const RectF* clip) {
     g.SetSmoothingMode(SmoothingModeAntiAlias);
     g.SetPixelOffsetMode(PixelOffsetModeHalf);
@@ -1397,12 +1502,7 @@ static void DrawAll(Graphics& g, const RectF* clip) {
     g.ScaleTransform(L.dpi, L.dpi);
     if (clip) g.SetClip(*clip);   // 逻辑坐标；部分重绘时仅栅格化失效区
 
-    if (g_drawDirty) {
-        EnterCriticalSection(&g_lock);
-        g_drawSnap = g_snap;
-        LeaveCriticalSection(&g_lock);
-        g_drawDirty = false;
-    }
+    RefreshDrawSnap();
 
     DrawBackground(g);
     if (g_sheet == Sheet::None) {
@@ -1622,6 +1722,11 @@ static void OpenSheet(Sheet s) {
     g_sheetStart = GetTickCount64();
     g_sheetAnimating = g_sheetT < 1.0f;
     g_systemExpanded = false;
+    if (s == Sheet::Processes) { RefreshDrawSnap(); g_procScroll = 0; BuildProcessRows(); }
+    if (s == Sheet::Settings && g_edWL) {
+        SetWindowTextW(g_edWL, g_cfg.whitelist.c_str());
+        g_wlDraft = g_cfg.whitelist;
+    }
     RECT rc{};
     GetClientRect(g_hwnd, &rc);
     BuildLayout((float)rc.right, (float)rc.bottom, L.dpi);
@@ -1647,6 +1752,20 @@ static void CloseSheet() {
 
 static void Activate(CtlId id) {
     int iv = (int)id;
+    if (iv >= ID_PROC_BASE && iv < ID_PROC_BASE + 8) {
+        int row = g_procScroll + (iv - ID_PROC_BASE);
+        if (row >= 0 && row < (int)g_procList.size()) {
+            const ProcRow& r = g_procList[row];
+            if (r.st == ProcState::Builtin) {
+                g_toast = Tx(L"系统进程始终受保护", L"System processes are always protected");
+                g_lastToastMs = GetTickCount64();
+                KickAnim();
+            } else {
+                ToggleProtected(r.name);
+            }
+        }
+        return;
+    }
     if (iv >= ID_SET_COOL_BASE && iv < ID_SET_COOL_BASE + 4) {
         g_coolSel = iv - ID_SET_COOL_BASE; g_coolDirty = true; CommitSettings(); KickAnim(); return;
     }
@@ -1676,7 +1795,7 @@ static void Activate(CtlId id) {
         CloseSheet();
         break;
     case ID_HOME_PROCESS:
-        RefreshTop5();
+        g_procFromSettings = false;
         OpenSheet(Sheet::Processes);
         break;
     case ID_HOME_SYSTEM:
@@ -1689,6 +1808,10 @@ static void Activate(CtlId id) {
     case ID_SET_ABOUT:
         OpenSheet(Sheet::About);
         break;
+    case ID_SET_PROTECTED:
+        g_procFromSettings = true;
+        OpenSheet(Sheet::Processes);
+        break;
     case ID_ABOUT_REPO:
         OpenUrl(L"https://github.com/feiyu-labs/MemSweep"); break;
     case ID_ABOUT_ISSUES:
@@ -1696,8 +1819,14 @@ static void Activate(CtlId id) {
     case ID_ABOUT_UPDATES:
         OpenUrl(L"https://github.com/feiyu-labs/MemSweep/releases/latest"); break;
     case ID_ADV_BACK:
-        CommitSettings();
-        OpenSheet(Sheet::Settings);
+        if (g_sheet == Sheet::Advanced) {
+            CommitSettings();
+            OpenSheet(Sheet::Settings);
+        } else if (g_sheet == Sheet::Processes && g_procFromSettings) {
+            OpenSheet(Sheet::Settings);
+        } else {
+            CloseSheet();
+        }
         break;
     case ID_SYS_MORE:
         g_systemExpanded = !g_systemExpanded;
@@ -1827,19 +1956,15 @@ static void StartCombine(bool needConfirm) {
     if (h) CloseHandle(h);
     else InterlockedExchange(&g_cleaning, 0);
 }
-static void ShowTop5Menu(int idx) {
-    if (idx < 0 || idx >= g_top5Count) return;
-    ProcInfo p = g_top5[idx];
-    bool prot = (p.pid <= 4) || IsProtectedName(p.name);
-    std::wstring base = p.name;
-    if (base.size() > 4 && _wcsicmp(base.c_str() + base.size() - 4, L".exe") == 0)
-        base.resize(base.size() - 4);
+static void ShowProcMenu(int row) {
+    if (row < 0 || row >= (int)g_procList.size()) return;
+    const ProcRow& r = g_procList[row];
+    const bool can = (r.pid != 0 && r.st == ProcState::Normal);
     wchar_t trimLabel[160];
     swprintf(trimLabel, 160, Tx(L"释放此进程内存（%s）", L"Free this app's memory (%s)"),
-             FormatBytes(ProcPrivateWS(p)).c_str());
+             FormatBytes(r.ws).c_str());
     HMENU m = CreatePopupMenu();
-    AppendMenuW(m, MF_STRING | (prot ? MF_GRAYED : 0), 1, trimLabel);
-    AppendMenuW(m, MF_STRING | (prot ? MF_GRAYED : 0), 2, Tx(L"加入保护名单", L"Add to protected list"));
+    AppendMenuW(m, MF_STRING | (can ? 0 : MF_GRAYED), 1, trimLabel);
     AppendMenuW(m, MF_SEPARATOR, 0, nullptr);
     AppendMenuW(m, MF_STRING, 3, Tx(L"取消", L"Cancel"));
     SetForegroundWindow(g_hwnd);
@@ -1849,28 +1974,14 @@ static void ShowTop5Menu(int idx) {
     DestroyMenu(m);
     PostMessageW(g_hwnd, WM_NULL, 0, 0);
     if (cmd == 1) {
-        bool ok = TrimPid(p.pid);
-        g_toast = ok ? (Tx(L"已释放 ", L"Freed ") + p.name + L" · " + FormatBytes(ProcPrivateWS(p)))
-                     : (Tx(L"释放失败：", L"Couldn't free: ") + p.name);
+        bool ok = TrimPid(r.pid);
+        g_toast = ok ? (Tx(L"已释放 ", L"Freed ") + r.display + L" · " + FormatBytes(r.ws))
+                     : (Tx(L"释放失败：", L"Couldn't free: ") + r.display);
         g_lastToastMs = GetTickCount64();
-        Log(L"单进程修剪：%s (PID %u, 私有WS %s) -> %s", p.name.c_str(), p.pid,
-            FormatBytes(ProcPrivateWS(p)).c_str(), ok ? L"成功" : L"失败");
-        KickAnim();
-    } else if (cmd == 2) {
-        std::wstring wl = g_cfg.whitelist;
-        if (!wl.empty() && wl.back() != L',' && wl.back() != L' ') wl += L", ";
-        wl += base;
-        g_cfg.whitelist = wl;
-        g_wlDraft = wl;
-        SaveConfig();
-        RebuildWhitelist();
-        if (g_edWL) SetWindowTextW(g_edWL, g_cfg.whitelist.c_str());
-        g_toast = Tx(L"已加入保护名单：", L"Protected: ") + base;
-        g_lastToastMs = GetTickCount64();
-        Log(L"加入保护名单：%s", base.c_str());
         KickAnim();
     }
 }
+
 static void ShowTrayMenu(int x, int y) {
     HMENU m = CreatePopupMenu();
     AppendMenuW(m, MF_STRING | (g_cleaning != 0 ? MF_DISABLED : 0), 1, Tx(L"立即清理", L"Clean now"));
@@ -2047,6 +2158,18 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         InvalidateRect(hwnd, nullptr, FALSE);
         return 0;
     }
+    case WM_MOUSEWHEEL:
+        if (g_sheet == Sheet::Processes) {
+            int delta = GET_WHEEL_DELTA_WPARAM(wp);
+            g_procScroll += (delta > 0) ? -3 : 3;
+            int total = (int)g_procList.size();
+            int maxScroll = std::max(0, total - 8);
+            if (g_procScroll < 0) g_procScroll = 0;
+            if (g_procScroll > maxScroll) g_procScroll = maxScroll;
+            InvalidateRect(hwnd, nullptr, FALSE);
+            return 0;
+        }
+        break;
     case WM_MOUSEMOVE: {
         float x = (float)GET_X_LPARAM(lp) / L.dpi;
         float y = (float)GET_Y_LPARAM(lp) / L.dpi;
@@ -2109,8 +2232,8 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         float rx = (float)GET_X_LPARAM(lp) / L.dpi;
         float ry = (float)GET_Y_LPARAM(lp) / L.dpi;
         CtlId rid = HitTest(rx, ry);
-        if (g_sheet == Sheet::Processes && rid >= ID_TOP5_BASE && rid < ID_TOP5_BASE + 5) {
-            ShowTop5Menu((int)rid - ID_TOP5_BASE);
+        if (g_sheet == Sheet::Processes && rid >= ID_PROC_BASE && rid < ID_PROC_BASE + 8) {
+            ShowProcMenu(g_procScroll + (int)rid - ID_PROC_BASE);
             return 0;
         }
         break;
@@ -2981,7 +3104,6 @@ int RenderUISnapshot(const std::wstring& path) {
     LeaveCriticalSection(&g_lock);
     g_reclaimableBytes.store(ComputeReclaimable(s, g_cfg, nullptr));
     g_drawDirty = true;
-    RefreshTop5();
     g_snapshotMode = true;
     g_sheet = Sheet::None;
     {

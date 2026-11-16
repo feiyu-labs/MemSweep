@@ -11,8 +11,8 @@ BEGIN
     BEGIN
       VALUE "FileDescription", "MemSweep - Lightweight Windows Memory Cleaner"
       VALUE "ProductName", "MemSweep"
-      VALUE "FileVersion", "1.9.7.0"
-      VALUE "ProductVersion", "1.9.7.0"
+      VALUE "FileVersion", "1.9.8.0"
+      VALUE "ProductVersion", "1.9.8.0"
       VALUE "OriginalFilename", "MemSweep.exe"
     END
   END

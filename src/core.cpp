@@ -1315,6 +1315,12 @@ bool TrimPid(DWORD pid) {
     DisablePrivileges();
     return ok != 0;
 }
+bool IsBuiltinProtectedName(const std::wstring& name) {
+    std::wstring low = ToLower(name);
+    if (low.size() > 4 && low.compare(low.size() - 4, 4, L".exe") == 0) low.resize(low.size() - 4);
+    return !low.empty() && BuiltinProtect().count(low) != 0;
+}
+
 bool IsProtectedName(const std::wstring& name) {
     std::wstring low = ToLower(name);
     if (low.size() > 4 && low.compare(low.size() - 4, 4, L".exe") == 0) low.resize(low.size() - 4);
