@@ -9,7 +9,7 @@
 </p>
 
 <p align="center">
-  <strong>A Windows memory manager that only acts when memory is actually running out.</strong>
+  <strong>Reclaim memory without interrupting your work.</strong>
 </p>
 
 <p align="center">
@@ -44,9 +44,9 @@
 
 ## What it is
 
-MemSweep is a memory manager for Windows machines that sit close to their RAM limit — a workstation running an IDE, a browser, containers and a virtual machine at the same time.
+MemSweep reclaims memory held by idle background processes when Windows is under real pressure, so the applications you are working in keep their speed.
 
-When memory is genuinely short, it returns pages that idle background processes are holding, and leaves whatever you are working in alone. No drivers, no background services, no network access.
+It leaves out what makes other cleaners unreliable: no modified-page flushes, no global working-set sweeps, no process termination, no background services, no network access.
 
 | | |
 |:---|:---|
@@ -57,12 +57,12 @@ When memory is genuinely short, it returns pages that idle background processes 
 
 ## Features
 
-- **Cleans only when memory is actually short.** Automatic cleaning needs your threshold *and* real pressure: less than 512 MB available, or 95% in use. Free RAM sitting on the standby list is normal and is not treated as a shortage.
-- **Never touches active work.** The focused window, its parent process chain, anything focused in the last two minutes, and system or virtualisation services are excluded. A background process becomes a candidate only after five minutes of near-idle CPU.
-- **Never flushes modified pages, never kills processes.** The two shortcuts other cleaners take at the cost of frozen desktops, SSD write bursts and lost work.
-- **Can merge duplicate physical pages** on request, and aborts on the first keypress.
-- **Stays out of the way.** Notifications are suppressed during fullscreen games, presentations and Focus Assist; automatic passes report only when they actually free memory.
-- **One window.** Settings, processes and system status open as sheets over it, in two themes and two languages, with a remappable hotkey.
+- **Reclaims from the background, never the foreground.** The focused window, its parent process chain, anything focused in the last two minutes, and system or virtualisation services are excluded from every pass. A background process joins the candidate list after five minutes of near-idle CPU.
+- **Decides on pressure, not on a percentage.** A pass starts when your threshold is crossed *and* the system is short: under 512 MB available, or 95% in use. Memory parked on the standby list is normal Windows behaviour, not a signal to clean.
+- **Skips every operation that causes freezes.** No modified-page flush, no registry-cache flush, no global `MemoryEmptyWorkingSets`, no timer-resolution changes, no terminating processes.
+- **Merges duplicate physical pages on request**, with a kernel handle that aborts on your first keypress.
+- **Never interrupts.** No notifications while a fullscreen game, a presentation or Focus Assist is active; automatic passes report only when they actually free memory.
+- **One window, no dependencies.** 403 KB, 3.0 MB in the tray, two themes, two languages, a hotkey you can remap.
 
 <table align="center">
   <tr>
@@ -75,7 +75,7 @@ When memory is genuinely short, it returns pages that idle background processes 
   </tr>
   <tr>
     <td align="center"><b>System status</b></td>
-    <td align="center"><b>Change the hotkey</b></td>
+    <td align="center"><b>Set the hotkey</b></td>
   </tr>
   <tr>
     <td><img src="docs/screenshot-system-en.png" alt="System status sheet" width="380"></td>
@@ -118,7 +118,7 @@ Windows 11 26H2 (26340), i7-12800HX, 24 GB RAM, 150% scaling. Figures are the pr
 | Minimised to tray | 6.0 MB | 9.2 MB |
 | Tray, settled | **3.0 MB** | 9.6 MB |
 
-A manual clean on this machine has reclaimed 1–3 GB of free pages; the amount depends entirely on what is running.
+A manual clean on this machine has reclaimed 1–3 GB of free pages; the amount depends on what is running at the time.
 
 ## Compared with
 
@@ -127,7 +127,7 @@ A manual clean on this machine has reclaimed 1–3 GB of free pages; the amount 
 | Binary size | 403 KB | ~350 KB | ~10 MB (.NET) | ~80 MB (suite) | ~1.5 MB |
 | Tray memory | 3.0 MB | ~4.5 MB | ~35 MB | ~45 MB | ~18 MB |
 | Foreground immunity | Window, parent chain, 120 s focus history | No | No | Exclusion list | No |
-| Checks for a real shortage | Yes | No | No | Partial | Partial |
+| Pressure-based trigger | Yes | No | No | Partial | Partial |
 | Modified-page flush | Never | Yes | Yes | No | No |
 | Page combining | Yes, abortable | No | No | No | No |
 | ARM64 build | Yes | No | No | Yes | No |
@@ -152,21 +152,21 @@ The pinned compiler is zig 0.17.1: place it in `../tools/` next to the repositor
 ## FAQ
 
 **The percentage in Task Manager did not drop after cleaning.**
-That figure counts in-use physical pages. When every background process is protected or recently active, MemSweep leaves them alone and moves standby cache to the free list instead, which lowers allocation latency rather than the percentage.
+That figure counts in-use physical pages. When background processes are protected or recently active, MemSweep reclaims standby cache instead, which shortens the next allocation rather than moving the percentage.
 
 **Can it lower committed memory?**
-No, and no tool can. Commit is virtual memory promised to applications; trimming moves pages between RAM, standby and the pagefile. Lower it by closing applications or reducing heap limits (`-Xmx`, `--max-old-space-size`).
+No. Commit is virtual memory promised to applications; trimming moves pages between RAM, standby and the pagefile. To lower it, close applications or reduce heap limits (`-Xmx`, `--max-old-space-size`).
 
 **Why does it need administrator rights?**
-Purging standby lists and trimming the file cache are privileged NT operations. The installer registers a logon task so daily use never prompts.
+Purging standby lists and trimming the file cache are privileged NT operations. The installer registers a logon task, so daily use never prompts.
 
 ## Privacy
 
-MemSweep has no network code: no telemetry, no update checks, nothing sent anywhere. The only outbound links open a browser when you click them. Configuration and logs stay in `%APPDATA%\MemSweep\`.
+No network code: no telemetry, no update checks, no data leaves the machine. The only outbound links open a browser when you click them. Configuration and logs stay in `%APPDATA%\MemSweep\`.
 
 ## Community
 
-Bug reports and pull requests are welcome — see [CONTRIBUTING.md](CONTRIBUTING.md); report security issues privately as described in [SECURITY.md](SECURITY.md). Design decisions are documented in [docs/ENGINEERING.md](docs/ENGINEERING.md), and the research behind the thresholds in [RESEARCH.md](RESEARCH.md).
+Bug reports and pull requests are welcome — see [CONTRIBUTING.md](CONTRIBUTING.md); report security issues privately as described in [SECURITY.md](SECURITY.md). Design decisions are in [docs/ENGINEERING.md](docs/ENGINEERING.md), and the research behind the thresholds in [RESEARCH.md](RESEARCH.md).
 
 ## License
 
