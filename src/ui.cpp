@@ -286,7 +286,7 @@ struct Layout {
     RectF advIdleDeepRow, advBack;
 
     // 进程
-    RectF procRows[8], procHint, procSub;
+    RectF procRows[8], procHint, procSub, procHeader;
 
     // 系统
     RectF sysSummary, sysRows[9], sysMore, sysBtn[5];
@@ -311,7 +311,7 @@ static void BuildLayout(float w, float h, float dpi) {
 
     float sh = L.h - 32;
     if (g_sheet == Sheet::Advanced) sh = 380;
-    else if (g_sheet == Sheet::Processes) sh = 460;
+    else if (g_sheet == Sheet::Processes) sh = 480;
     else if (g_sheet == Sheet::System) sh = g_systemExpanded ? 520 : 360;
     else if (g_sheet == Sheet::About) sh = 360;
     L.sheet = RectF(16, (L.h - sh) / 2, L.w - 32, sh);
@@ -434,11 +434,12 @@ static void BuildLayout(float w, float h, float dpi) {
         L.advBack = RectF(L.sheet.X + 16, sy + 10, 32, 32);
         if (g_procFromSettings) AddHit(ID_ADV_BACK, K_TITLEBTN, L.advBack);
         L.procSub = RectF(bx, sy + 50, bw, 16);
+        L.procHeader = RectF(bx, sy + 80, bw, 14);
         for (int i = 0; i < 8; i++) {
-            L.procRows[i] = RectF(bx, sy + 84 + i * 40, bw, 38);
+            L.procRows[i] = RectF(bx, sy + 104 + i * 40, bw, 38);
             AddHit((CtlId)(ID_PROC_BASE + i), K_BUTTON, L.procRows[i]);
         }
-        L.procHint = RectF(bx, sy + 414, bw, 16);
+        L.procHint = RectF(bx, sy + 432, bw, 16);
         return;
     }
 
@@ -470,6 +471,7 @@ static NOTIFYICONDATAW g_nid{};
 static bool g_trayOn = false;
 static HICON g_trayIcon = nullptr;
 static ULONGLONG g_lastToastMs = 0;
+static ULONGLONG g_cleanDoneAt = 0;   // 清理完成后的界面确认（6s）
 static std::wstring g_toast;
 static int g_lastPct = -1;
 static unsigned long long g_lastAvail = 0, g_lastStandby = 0;
@@ -1009,7 +1011,21 @@ static void DrawHome(Graphics& g) {
     const wchar_t* sub = L"无需清理";
     const wchar_t* subEn = L"no cleaning needed";
     Color tc = T.accent;
-    if (tidying) {
+    wchar_t doneSub[96] = {};
+    const bool justCleaned = g_cleanDoneAt && GetTickCount64() - g_cleanDoneAt < 6000 && !cleaning;
+    if (justCleaned) {
+        unsigned long long gain = g_lastFreeGain.load() > g_lastAvailGain.load()
+                                ? g_lastFreeGain.load() : g_lastAvailGain.load();
+        title = L"清理完成"; titleEn = L"Cleaned";
+        if (gain >= 16ULL * MB)
+            swprintf(doneSub, 96, Tx(L"已释放 %s · 可用 %s", L"Freed %s · %s available"),
+                     FormatBytes(gain).c_str(), FormatBytes(m.availPhys).c_str());
+        else
+            swprintf(doneSub, 96, Tx(L"可用 %s", L"%s available"),
+                     FormatBytes(m.availPhys).c_str());
+        sub = doneSub; subEn = doneSub;
+        tc = T.accent;
+    } else if (tidying) {
         title = L"正在合并内存页"; titleEn = L"Merging pages";
         sub = L"正在合并重复页面，请稍候"; subEn = L"merging duplicate pages, please wait";
         tc = T.accent;
@@ -1112,9 +1128,13 @@ static void DrawHome(Graphics& g) {
              FormatBytes(m.totalPhys).c_str());
     TextAt(g, used, L.usedLine, f12, T.text2, StringAlignmentCenter);
     wchar_t meta[160];
-    swprintf(meta, 160, Tx(L"可释放约 %s · 可用 %s", L"~%s reclaimable · %s available"),
-             FormatBytes(g_reclaimableBytes.load()).c_str(),
-             FormatBytes(m.availPhys).c_str());
+    unsigned long long reclaim = g_reclaimableBytes.load();
+    if (reclaim >= 16ULL * MB)
+        swprintf(meta, 160, Tx(L"可释放约 %s · 可用 %s", L"~%s reclaimable · %s available"),
+                 FormatBytes(reclaim).c_str(), FormatBytes(m.availPhys).c_str());
+    else
+        swprintf(meta, 160, Tx(L"可用 %s", L"%s available"),
+                 FormatBytes(m.availPhys).c_str());
     TextAt(g, meta, L.metaLine, f11, T.text3, StringAlignmentCenter);
 
     {
@@ -1288,13 +1308,14 @@ static void DrawProcessSheet(Graphics& g) {
     BuildProcessRows();
     int protCount = 0;
     for (const auto& r : g_procList) if (r.st == ProcState::Protected) protCount++;
-    wchar_t sub[160];
-    if (protCount)
-        swprintf(sub, 160, Tx(L"点击切换保护 · 右键释放内存 · 已保护 %d 个",
-                              L"Click to protect · right-click to free · %d protected"), protCount);
-    else
-        wcscpy(sub, Tx(L"点击切换保护 · 右键释放内存", L"Click to protect · right-click to free"));
-    TextAt(g, sub, L.procSub, f11, T.text3);
+    TextAt(g, Tx(L"点击右侧「保护」，清理时跳过该应用——不释放它的内存",
+                 L"Click Protect to skip this app when cleaning - its memory is left alone"),
+           L.procSub, f11, T.text3);
+    TextAt(g, Tx(L"应用", L"App"), RectF(L.procHeader.X, L.procHeader.Y, 120, 14), f11, T.text3);
+    TextAt(g, Tx(L"内存", L"Memory"), RectF(L.procHeader.GetRight() - 126, L.procHeader.Y, 80, 14),
+           f11, T.text3, StringAlignmentFar);
+    TextAt(g, Tx(L"保护", L"Protect"), RectF(L.procHeader.GetRight() - 46, L.procHeader.Y, 40, 14),
+           f11, T.text3, StringAlignmentCenter);
 
     const int total = (int)g_procList.size();
     const int maxScroll = std::max(0, total - 8);
@@ -1343,7 +1364,8 @@ static void DrawProcessSheet(Graphics& g) {
         FillRound(g, RectF(L.sheet.GetRight() - 14, top, 3, h), 1.5f, T.track);
         FillRound(g, RectF(L.sheet.GetRight() - 14, ty, 3, th), 1.5f, T.text3);
     }
-    TextAt(g, Tx(L"滚轮浏览 · 数值为专用工作集", L"Scroll · values are private working set"),
+    TextAt(g, Tx(L"右键释放内存 · 滚轮浏览 · 系统与虚拟机始终保护",
+                 L"Right-click to free · scroll · system/VM always protected"),
            L.procHint, f11, T.text3);
 }
 
@@ -1481,7 +1503,14 @@ static void DrawToast(Graphics& g) {
     float inA = ClampF(life / 0.12f, 0.0f, 1.0f);
     float outA = life > 0.75f ? 1.0f - (life - 0.75f) / 0.25f : 1.0f;
     BYTE alpha = (BYTE)(255 * inA * outA);
-    RectF tr((L.w - 280) / 2, 96 + (1.0f - inA) * 10.0f, 280, 40);
+    StringFormat fmt;
+    fmt.SetAlignment(StringAlignmentNear);
+    fmt.SetLineAlignment(StringAlignmentCenter);
+    RectF bounds;
+    g.MeasureString(g_toast.c_str(), (INT)g_toast.size(), f12b,
+                    RectF(0, 0, 1000, 40), &fmt, &bounds);
+    float tw = ClampF(bounds.Width + 36.0f, 200.0f, L.w - 32.0f);
+    RectF tr((L.w - tw) / 2, L.h - 48 + (1.0f - inA) * 10.0f, tw, 40);
     FillRound(g, tr, 18, C((BYTE)(alpha * 0.92f), 30, 36, 46));
     StrokeRound(g, tr, 18, C((BYTE)(alpha * 0.5f), 70, 80, 96), 1);
     TextAt(g, g_toast, tr, f12b, C(alpha, 235, 238, 243), StringAlignmentCenter);
@@ -2257,6 +2286,10 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         if (wp == 1) {
             if (g_sheet == Sheet::System) QuerySysInfo(false);
             UpdateStats(false);
+            if (g_cleanDoneAt && GetTickCount64() - g_cleanDoneAt >= 6000) {
+                g_cleanDoneAt = 0;
+                InvalidateRect(hwnd, nullptr, FALSE);
+            }
             // 隐藏超过 20 秒释放双缓冲，降低托盘常驻内存
             if (!IsWindowVisible(hwnd)) {
                 if (!g_hiddenAt) g_hiddenAt = GetTickCount64();
@@ -2320,6 +2353,10 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     }
     case WM_APP_STATS: UpdateStats(false); return 0;
     case WM_APP_CLEANING:
+        if (wp == 0) {
+            g_cleanDoneAt = GetTickCount64();
+            g_ringPulseAt = g_cleanDoneAt;
+        }
         KickAnim();
         TrayUpdate(true);
         return 0;

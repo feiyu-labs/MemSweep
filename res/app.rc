@@ -9,10 +9,10 @@ BEGIN
   BEGIN
     BLOCK "080904B0"
     BEGIN
-      VALUE "FileDescription", "MemSweep - Lightweight Windows Memory Cleaner"
+      VALUE "FileDescription", "MemSweep"
       VALUE "ProductName", "MemSweep"
-      VALUE "FileVersion", "1.9.8.0"
-      VALUE "ProductVersion", "1.9.8.0"
+      VALUE "FileVersion", "1.9.9.0"
+      VALUE "ProductVersion", "1.9.9.0"
       VALUE "OriginalFilename", "MemSweep.exe"
     END
   END
