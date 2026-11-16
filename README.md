@@ -1,7 +1,7 @@
 # 内存速清 MemSweep
 
 <p align="center">
-  <img src="res/icon.ico" alt="MemSweep Logo" width="96" height="96" />
+  <img src="docs/logo.png" alt="MemSweep Logo" width="96" height="96" />
 </p>
 
 <p align="center">
