@@ -24,3 +24,7 @@ jobs:
       - name: Build + self tests
         shell: cmd
         run: build.cmd test
+
+      - name: Build ARM64 (compile check)
+        shell: cmd
+        run: build.cmd arm64

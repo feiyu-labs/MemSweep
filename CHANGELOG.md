@@ -1,5 +1,28 @@
 # Changelog
 
+## v1.9.10 — 2026-11-16
+
+### 发布链路修复（发版前审计）
+- **release zip 缺安装脚本**：README 让用户“右键 install.cmd”，但 zip 之前只有 exe/LICENSE/README。
+  现在 x64 / arm64 两个 zip 都含 `MemSweep.exe`、`install.cmd`、`uninstall.cmd`、`INSTALL.txt`、`LICENSE`。
+- **install.cmd 只认 `dist\MemSweep.exe`**：从 zip 根目录运行会报“请先运行 build.cmd”。现在优先同目录，
+  回退 `dist\`。
+- **ARM64 包内 exe 名**：打包时统一重命名为 `MemSweep.exe`（两个架构各自成 zip），install.cmd 无需分支。
+- **release.yml**：`gh release create` 不再依赖 shell 通配符（PowerShell 不展开），改为显式文件列表；
+  CI 增加 ARM64 编译检查；zip 内不再放带相对图片的 README，改用 `INSTALL.txt`。
+
+### 逻辑 / 文案修复
+- **白名单 `chrome.exe` 匹配失败**：匹配集合统一去掉 `.exe`；设置页保存时也做规范化与去重，
+  `chrome.exe` 与 `chrome` 真正等价。
+- EN 进程表头 “Memory” 与 “Protect” 粘连 → 拉开间距；EN 高级页补回 `Ctrl+Shift+M`。
+- README 内存数字按实测更新（主屏约 12MB 私有 / 17MB WS；托盘约 9MB / 8MB），
+  术语「深度整理」→「深度清理」。
+
+### 验证
+- `build.cmd test` PASS 零警告；`build.cmd release` / `build.cmd arm64` 均构建通过；安装版 selftest PASS。
+- 模拟打包检查 zip 内容；FileDescription=MemSweep，FileVersion=1.9.10.0。
+- 413,184 字节；SHA256 `A91009AFA47FDEA732BE550B88EA019CE769EADA9C16D482466DCF51A02EA10A`。
+
 ## v1.9.9 — 2026-11-16
 
 ### 清理完成的界面确认（用户反馈）

@@ -9,10 +9,12 @@ if errorlevel 1 (
   exit /b 1
 )
 
-set SRC=%~dp0dist\MemSweep.exe
+rem Release zip: MemSweep.exe next to install.cmd; dev tree: dist\MemSweep.exe
+set SRC=%~dp0MemSweep.exe
+if not exist "%SRC%" set SRC=%~dp0dist\MemSweep.exe
 set DST=%ProgramFiles%\MemSweep
 if not exist "%SRC%" (
-  echo [install] 未找到 %SRC%，请先运行 build.cmd
+  echo [install] 未找到 MemSweep.exe（应与 install.cmd 同目录，或位于 dist\）
   pause
   exit /b 1
 )

@@ -907,3 +907,25 @@ v1.9.6 的设置页有 9 组、组间距 6–10px（力度说明→保护名单�
 - 重启 /show 实拍：欢迎 Toast 完整（约 530px 宽），位于底部，不遮挡状态区。
 - exe FileDescription 读取为 MemSweep。
 
+## 二十八、v1.9.10 发版前全链路审计（2026-11-16 第十九轮）
+
+### 1. 发布链路
+
+- release zip 原本只有 exe/LICENSE/README，**没有 install.cmd**，而 README 让用户运行它；
+  install.cmd 又只找 `dist\MemSweep.exe`，zip 根目录会直接报错。两处都已修。
+- ARM64 的 exe 名为 `MemSweep-arm64.exe`，install.cmd 固定复制 `MemSweep.exe`；
+  打包时按架构分目录并统一命名。
+- PowerShell 不展开通配符，`gh release create MemSweep-*.zip` 不可靠；改为 `Get-ChildItem` 显式列表。
+- zip 内 README 的相对图片不在包内，改放 `INSTALL.txt`。
+
+### 2. 白名单语义
+
+`RebuildWhitelist` 之前不剥 `.exe`，用户手输 `chrome.exe` 时集合里是 `chrome.exe`，而匹配侧
+把进程名剥成 `chrome`，导致“看起来加了但没生效”。现在集合与保存都做规范化/去重。
+
+### 3. 视觉/文案回归
+
+2.0x/1.5x、zh/en、light/dark 全量渲染：EN 进程表头 “Memory/Protect” 间距、EN 高级页热键、
+中文进程表列头位置均已修。内存数字按全新实例实测更新（vis 12.1MB/16.8MB，tray 8.9/8.3，
+hidden 9.6/6.4）。
+

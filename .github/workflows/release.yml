@@ -20,6 +20,10 @@ jobs:
           Expand-Archive zig.zip -DestinationPath zig-sdk
           "ZIG=$env:GITHUB_WORKSPACE\zig-sdk\zig-x86_64-windows-0.17.1\zig.exe" >> $env:GITHUB_ENV
 
+      - name: Self tests
+        shell: cmd
+        run: build.cmd test
+
       - name: Build x64 + ARM64
         shell: cmd
         run: |
@@ -29,13 +33,17 @@ jobs:
       - name: Package
         shell: pwsh
         run: |
-          $tag = "${{ github.ref_name }}"
-          $pairs = @{
-            "MemSweep-$tag-x64.zip"   = "dist/MemSweep.exe"
-            "MemSweep-$tag-arm64.zip" = "dist/MemSweep-arm64.exe"
-          }
-          foreach ($zip in $pairs.Keys) {
-            Compress-Archive -Path $pairs[$zip], LICENSE, README.md -DestinationPath $zip
+          $tag = $env:GITHUB_REF_NAME
+          $common = @('install.cmd', 'uninstall.cmd', 'INSTALL.txt', 'LICENSE')
+          $exes = @{ 'x64' = 'dist/MemSweep.exe'; 'arm64' = 'dist/MemSweep-arm64.exe' }
+          foreach ($arch in $exes.Keys) {
+            $dir = "pkg-$arch"
+            New-Item -ItemType Directory -Path $dir -Force | Out-Null
+            # Both zips carry MemSweep.exe so install.cmd works unchanged.
+            Copy-Item $exes[$arch] (Join-Path $dir 'MemSweep.exe') -Force
+            Copy-Item $common $dir -Force
+            $zip = "MemSweep-$tag-$arch.zip"
+            Compress-Archive -Path (Join-Path $dir '*') -DestinationPath $zip -Force
             $h = (Get-FileHash $zip -Algorithm SHA256).Hash
             "$h  $zip" | Out-File "$zip.sha256" -Encoding ascii
           }
@@ -45,4 +53,5 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         shell: pwsh
         run: |
-          gh release create "$env:GITHUB_REF_NAME" MemSweep-*.zip MemSweep-*.zip.sha256 --generate-notes --title "MemSweep $env:GITHUB_REF_NAME"
+          $files = Get-ChildItem -Name 'MemSweep-*.zip', 'MemSweep-*.zip.sha256'
+          gh release create $env:GITHUB_REF_NAME @files --generate-notes --title "MemSweep $env:GITHUB_REF_NAME"

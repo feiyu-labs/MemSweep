@@ -586,7 +586,11 @@ static std::unordered_set<std::wstring> g_whitelistSet;
 void RebuildWhitelist() {
     Config c = GetConfigSnapshot();
     std::unordered_set<std::wstring> next;
-    for (auto& n : SplitCSV(c.whitelist)) next.insert(n);
+    for (auto n : SplitCSV(c.whitelist)) {
+        // 手输 chrome.exe 与 chrome 等价：集合里统一去掉后缀，匹配才一致
+        if (n.size() > 4 && n.compare(n.size() - 4, 4, L".exe") == 0) n.resize(n.size() - 4);
+        if (!n.empty()) next.insert(n);
+    }
     EnterCriticalSection(&g_lock);
     g_whitelistSet.swap(next);
     LeaveCriticalSection(&g_lock);

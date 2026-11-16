@@ -4,7 +4,7 @@
 [![Release](https://img.shields.io/github/v/release/feiyu-labs/MemSweep)](https://github.com/feiyu-labs/MemSweep/releases/latest)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 
-> 单文件 ~359KB · 自身常驻约 8MB（主屏） · 零依赖 · 无网络无遥测 · 前台免疫 · UI 永不阻塞的 Windows 智能内存守护
+> 单文件 ~403KB · 主屏约 12MB / 托盘约 9MB（私有） · 零依赖 · 无网络无遥测 · 前台免疫 · UI 永不阻塞的 Windows 智能内存守护
 
 MemSweep 是为「重度开发机内存常年 90%+」场景设计的现代内存清理器。它把 2026 年全网内存清理方案
 （Mem Reduct / WinMemoryCleaner / Process Lasso SmartTrim / ISLC / RAMKeeper / WinMemClean 等）
@@ -17,7 +17,8 @@ MemSweep 是为「重度开发机内存常年 90%+」场景设计的现代内存
 ## 📦 获取
 
 - **下载**：[GitHub Releases](https://github.com/feiyu-labs/MemSweep/releases/latest)
-  （`MemSweep-<版本>-x64.zip` / `-arm64.zip`，各附 SHA256）
+  （`MemSweep-<版本>-x64.zip` / `-arm64.zip`，内含 `MemSweep.exe`、`install.cmd`、
+  `uninstall.cmd`、`INSTALL.txt`、`LICENSE`，各附 SHA256）
 - **安装**：解压后右键 `install.cmd` 以管理员运行（复制到 Program Files +
   计划任务开机自启 + 桌面快捷方式）；卸载运行 `uninstall.cmd`，配置与日志保留在
   `%APPDATA%\MemSweep\`
@@ -78,11 +79,11 @@ MemSweep 是为「重度开发机内存常年 90%+」场景设计的现代内存
 
 ![settings](docs/screenshot-settings.png)
 
-### 关于（v1.9.9）
+### 关于（v1.9.10）
 
 设置页底部「关于 MemSweep」或托盘右键 →「关于 MemSweep…」打开：
 
-- 品牌标记 + 版本/架构（`v1.9.9 · x64`）
+- 品牌标记 + 版本/架构（`v1.9.10 · x64`）
 - GitHub 仓库 / 问题反馈 / 检查更新（用系统浏览器打开，应用自身不联网）
 - `MIT License · 不联网 · 不收集数据 · © 2026 feiyu-labs`
 
@@ -177,7 +178,7 @@ MemSweep 是为「重度开发机内存常年 90%+」场景设计的现代内存
 - 窗口为 **无边框自绘**（无原生标题栏），Win11 DWM 圆角 + 阴影
 - 若面板被全屏游戏遮挡，会弹托盘气泡提示 `Alt+Tab`
 - **键盘**：`Esc` 关闭 Sheet / 隐藏、`Ctrl+Enter` 立即清理、`Ctrl+S` 立即保存当前设置
-- **内存**：主屏 **8.2MB 私有**；托盘隐藏 **6.5MB**（隐藏即释放双缓冲 + HeapCompact）；特权按需开启；全部窗口禁用 IME 注入
+- **内存**：主屏 **约 12MB 私有 / 17MB 工作集**；托盘隐藏 **约 9MB 私有**（隐藏即释放双缓冲 + HeapCompact，工作集可降到 3–8MB）；特权按需开启；全部窗口禁用 IME 注入
 
 ---
 
@@ -258,7 +259,7 @@ uninstall.cmd        :: 右键 → 以管理员身份运行
 - **Slint / egui**：原生 Rust UI，但常驻约 **30–95MB / 100–185MB**，且需要重写现有 C++ 引擎。
   仅在未来要跨平台时才值得评估 Slint。
 - **WinUI 3**：复杂应用实测 WS 约 155MB，还要 Windows App SDK；不符合轻量托盘工具。
-- **C++/Win32 + GDI+（当前）**：**8.2MB private / 12.7MB WS**（全新托盘 5.9MB），零额外运行时。
+- **C++/Win32 + GDI+（当前）**：**约 12MB private / 17MB WS**（主屏）、**约 9MB / 8MB**（全新托盘），零额外运行时。
   520×600 窗口下 GDI+ 足够；若未来过渡帧率不够，再加 Direct2D/DirectWrite + DirectComposition，
   仍然不引入 WebView。
 
@@ -271,8 +272,8 @@ uninstall.cmd        :: 右键 → 以管理员身份运行
 |---|---|
 | **v1.7 单次快速清理（提权）** | 候选 117，修剪 116，全量缓存 + 文件缓存，**空闲 +3509MB，可用 +1128MB，4.14s** |
 | **v1.7 自动低优先级缓存** | 缓存 2.3GB；**空闲 3.3→4.2GB（+991MB）**，可用 5.5→5.5GB，0.34s |
-| **v1.7 深度整理（可选）** | 合并 155,320 页 ≈607MB，空闲 +1635MB，可用 +1112MB，总 9.94s；另一次 143,453 页/560MB/7.2s |
-| **v1.7 深度整理最慢样本** | 合并 284,040 页 ≈1.1GB，可用 1.8→5.8GB，但耗时 **52.6s** → 因此默认关闭 |
+| **v1.7 深度清理（可选）** | 合并 155,320 页 ≈607MB，空闲 +1635MB，可用 +1112MB，总 9.94s；另一次 143,453 页/560MB/7.2s |
+| **v1.7 深度整理最慢样本** | 合并 284,040 页 ≈1.1GB，可用 1.8→5.8GB，但耗时 **52.6s** → 仅在「清理力度=深度」或托盘显式动作时执行 |
 | **v1.8 页面合并（EventHandle）** | 合并 221,659 页 ≈866MB，空闲 20MB→1.2GB，18.1s；超时/取消可中止 |
 | **v1.8 离开时维护实测** | 空闲 5 秒测试配置：合并 280,733 页 ≈1.1GB，**空闲 +963MB，可用 +751MB，14.9s** |
 | **v1.9.2 CPU 预算** | 主屏可见 **1.6%**（托盘图标按百分比重建节流后）；隐藏态 1.6~4.7% 波动来自整机负载与 5s 采样守护（tick 实测 0.32%）；环境高光 6.7fps |
@@ -287,8 +288,8 @@ uninstall.cmd        :: 右键 → 以管理员身份运行
 
 ### 当前部署状态（2026-11-15）
 
-- 安装位置：`C:\Program Files\MemSweep\MemSweep.exe`（**v1.9.9.0**，412,160 字节）
-- SHA256：`1125D90951FDB71E0102ABAE0F184618D70236D7F0E0DF5093DF1D7A5653DD54`
+- 安装位置：`C:\Program Files\MemSweep\MemSweep.exe`（**v1.9.10.0**，413,184 字节）
+- SHA256：`A91009AFA47FDEA732BE550B88EA019CE769EADA9C16D482466DCF51A02EA10A`
 - 计划任务：`MemSweep`（登录触发 / HighestAvailable / 电池供电可启动 / 无限执行时限）
 - `WinMemoryCleaner`：**已彻底移除**（进程/任务/winget 包/ARP/注册表/快捷方式/残留目录）
 - 主题：浅色（面板底部 自动/浅色/深色，已验证点击生效）

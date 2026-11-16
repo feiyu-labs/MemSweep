@@ -786,7 +786,21 @@ static void CommitSettings() {
     if (g_edWL) GetWindowTextW(g_edWL, buf, 512);
     std::wstring wl = buf;
     if (wl.empty() && !g_wlDraft.empty()) wl = g_wlDraft;
-    g_cfg.whitelist = wl;
+    {
+        std::vector<std::wstring> names = SplitCSV(wl);
+        std::vector<std::wstring> canon;
+        for (auto n : names) {
+            if (n.size() > 4 && n.compare(n.size() - 4, 4, L".exe") == 0) n.resize(n.size() - 4);
+            if (n.empty()) continue;
+            if (std::find(canon.begin(), canon.end(), n) == canon.end()) canon.push_back(n);
+        }
+        std::wstring joined;
+        for (size_t i = 0; i < canon.size(); i++) {
+            if (i) joined += L", ";
+            joined += canon[i];
+        }
+        g_cfg.whitelist = joined;
+    }
     g_cfg.autostart = s_autostart;
     SaveConfig();
     RebuildWhitelist();
@@ -1312,7 +1326,7 @@ static void DrawProcessSheet(Graphics& g) {
                  L"Click Protect to skip this app when cleaning - its memory is left alone"),
            L.procSub, f11, T.text3);
     TextAt(g, Tx(L"应用", L"App"), RectF(L.procHeader.X, L.procHeader.Y, 120, 14), f11, T.text3);
-    TextAt(g, Tx(L"内存", L"Memory"), RectF(L.procHeader.GetRight() - 126, L.procHeader.Y, 80, 14),
+    TextAt(g, Tx(L"内存", L"Memory"), RectF(L.procHeader.GetRight() - 142, L.procHeader.Y, 80, 14),
            f11, T.text3, StringAlignmentFar);
     TextAt(g, Tx(L"保护", L"Protect"), RectF(L.procHeader.GetRight() - 46, L.procHeader.Y, 40, 14),
            f11, T.text3, StringAlignmentCenter);
@@ -1438,7 +1452,7 @@ static void DrawAdvancedSheet(Graphics& g) {
     const wchar_t* idZh[3] = { L"1 分钟", L"5 分钟", L"10 分钟" };
     const wchar_t* idEn[3] = { L"1m", L"5m", L"10m" };
     DrawSeg(g, L.advIdleSeg, idZh, idEn, 3, g_idleSel);
-    DrawSwitchRow(g, L.advHotkeyRow, L"全局热键 Ctrl+Shift+M", L"Global hotkey", s_hotkey,
+    DrawSwitchRow(g, L.advHotkeyRow, L"全局热键 Ctrl+Shift+M", L"Global hotkey Ctrl+Shift+M", s_hotkey,
                   ToggleValue(ID_TG_HOTKEY, s_hotkey));
     DrawSwitchRow(g, L.advEcoRow, L"后台效率模式", L"Efficiency mode", s_eco,
                   ToggleValue(ID_TG_ECO, s_eco));

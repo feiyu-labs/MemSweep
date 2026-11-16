@@ -55,7 +55,10 @@ res/             图标、UAC 清单、版本信息
 16. **清理完成反馈**：托盘气泡之外，主屏状态区必须显示 6s 结果（清理完成 + 释放/可用）；
     到期由 1s tick 清理并重绘。Toast 宽度按文本测量（200–`L.w-32`）、底部居中，
     不得用固定宽度；Windows 通知头部的应用名来自 `FileDescription`，必须短（MemSweep）。
-17. **布局完整性 / 模态绘制**：`BuildLayout` 必须为当前屏幕的**所有**绘制几何赋值，
+17. **发布物完整性**：两个架构的 zip 必须包含 `MemSweep.exe`（统一名）、`install.cmd`、
+    `uninstall.cmd`、`INSTALL.txt`、`LICENSE`；`install.cmd` 要同时支持 zip 根目录与 `dist\`；
+    CI 必须编译 ARM64；release 的 `gh` 参数用显式文件列表，不依赖 shell 通配符。
+18. **布局完整性 / 模态绘制**：`BuildLayout` 必须为当前屏幕的**所有**绘制几何赋值，
     不得按 Sheet 状态跳过首页矩形（`Layout()` 的 `RectF` 默认构造不初始化，读到即随机坐标，
     v1.9.4 左上角残影教训）。Sheet 打开时 `DrawAll` 只画「背景 + 遮罩 + Sheet」，
     不画首页/标题栏——16px 边缘只会露出被裁切的碎片，视觉上更像故障。
