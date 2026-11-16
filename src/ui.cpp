@@ -2637,10 +2637,14 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         return 0;
     }
     case WM_APP_TRAY: {
-        int ev = LOWORD(lp);
+        // NOTIFYICON_VERSION_4 的参数打包：事件在 lParam 低位，光标坐标在 wParam
+        // （LOWORD=x，HIWORD=y，屏幕坐标）。从 lParam 取坐标会读到“事件号/图标 id”，
+        // 菜单就会固定在屏幕左上角——这就是那个偏移 bug。
+        const int ev = LOWORD(lp);
+        POINT pt{ GET_X_LPARAM(wp), GET_Y_LPARAM(wp) };
         if (ev == WM_CONTEXTMENU) {
-            int x = GET_X_LPARAM(lp), yy = GET_Y_LPARAM(lp);
-            ShowTrayMenu(x, yy);
+            if (pt.x == 0 && pt.y == 0) GetCursorPos(&pt);   // 少数外壳不填坐标
+            ShowTrayMenu(pt.x, pt.y);
         } else if (ev == WM_LBUTTONUP || ev == NIN_SELECT || ev == WM_LBUTTONDBLCLK) {
             static ULONGLONG lastShow = 0;
             ULONGLONG now = GetTickCount64();

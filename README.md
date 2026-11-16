@@ -83,7 +83,7 @@ MemSweep reclaims memory that idle background processes are holding, so what you
 
 ## Install
 
-Download `MemSweep-v1.9.14-x64.zip` or `MemSweep-v1.9.14-arm64.zip` from [Releases](https://github.com/feiyu-labs/MemSweep/releases/latest), extract it, then right-click `install.cmd` and choose **Run as administrator**.
+Download `MemSweep-v1.9.15-x64.zip` or `MemSweep-v1.9.15-arm64.zip` from [Releases](https://github.com/feiyu-labs/MemSweep/releases/latest), extract it, then right-click `install.cmd` and choose **Run as administrator**.
 
 The script copies `MemSweep.exe` to `C:\Program Files\MemSweep\`, registers a logon task with elevated privileges so startup never prompts, adds a desktop shortcut and starts MemSweep in the tray.
 
