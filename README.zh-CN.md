@@ -109,11 +109,21 @@ Windows 支持把内容完全相同的物理页合并为写时复制引用。Mem
 
 MemSweep 还会读取内存压缩、页面合并、SysMain、分页文件与已提交的情况，前两项如果被别的优化脚本关掉了，可以一键恢复。
 
+### 修改全局热键
+
+清理热键可以自己换。打开**设置 → 高级设置 → 全局热键**，点击右侧的组合键，按下想要的组合即可。只按住修饰键时会实时预览 `Ctrl+Alt…` 而不提交，`Esc` 保留原来的组合，点到窗口外面自动放弃。
+
+组合键交给 Windows 验证，不靠猜：缺少修饰键、属于保留组合（`Alt+Tab`、`Alt+F4`、MemSweep 自己的 `Ctrl+S`）、以及被别的程序占用，这三种情况会分别显示在行下方，录制状态保持不变，可以直接换一个再按。新组合注册失败时旧组合继续生效——只有注册成功才会写入配置。
+
+<p align="center">
+  <img src="docs/screenshot-hotkey-zh.png" alt="录制新的全局热键" width="380">
+</p>
+
 ---
 
 ## 安装
 
-从 [Releases](https://github.com/feiyu-labs/MemSweep/releases/latest) 下载 `MemSweep-v1.9.11-x64.zip` 或 `MemSweep-v1.9.11-arm64.zip`，解压后右键 `install.cmd`，选择**以管理员身份运行**。
+从 [Releases](https://github.com/feiyu-labs/MemSweep/releases/latest) 下载 `MemSweep-v1.9.12-x64.zip` 或 `MemSweep-v1.9.12-arm64.zip`，解压后右键 `install.cmd`，选择**以管理员身份运行**。
 
 脚本会把 `MemSweep.exe` 复制到 `C:\Program Files\MemSweep\`，注册一个最高权限的登录计划任务（因此开机不会弹 UAC），创建桌面快捷方式，并让 MemSweep 进入托盘。
 

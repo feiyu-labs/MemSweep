@@ -2,8 +2,8 @@
 #pragma once
 
 // 单一版本源：UI 关于页、诊断导出、日志共用；资源文件 res/app.rc 仍需手动同步。
-#define MEMSWEEP_VERSION      L"1.9.11"
-#define MEMSWEEP_VERSION_FULL L"1.9.11.0"
+#define MEMSWEEP_VERSION      L"1.9.12"
+#define MEMSWEEP_VERSION_FULL L"1.9.12.0"
 
 
 #define WIN32_LEAN_AND_MEAN
@@ -120,6 +120,90 @@ inline unsigned long long Grow(unsigned long long after, unsigned long long befo
 inline float Lerp(float a, float b, float t) { return a + (b - a) * t; }
 inline float EaseOutCubic(float t) { float u = 1.0f - t; return 1.0f - u * u * u; }
 
+// ---- 全局热键 ----
+// 语法与 Windows Terminal / VS Code 一致：Win+Ctrl+Alt+Shift+<Key>，
+// 顺序无关、大小写不敏感；输出固定 Win → Ctrl → Alt → Shift。
+// 只接受能显示出来的键：字母、数字、F1–F24、Space；其余一律拒绝，
+// 避免出现配置里能存、界面上显示不出来的组合。
+struct HotkeySpec {
+    UINT mods = MOD_CONTROL | MOD_SHIFT;
+    UINT vk   = 'M';
+
+    bool IsDefault() const { return mods == (MOD_CONTROL | MOD_SHIFT) && vk == 'M'; }
+
+    static std::wstring KeyLabel(UINT vk) {
+        if (vk >= 'A' && vk <= 'Z') return std::wstring(1, (wchar_t)vk);
+        if (vk >= '0' && vk <= '9') return std::wstring(1, (wchar_t)vk);
+        if (vk >= VK_F1 && vk <= VK_F24) return L"F" + std::to_wstring(vk - VK_F1 + 1);
+        if (vk == VK_SPACE) return L"Space";
+        if (vk == VK_ESCAPE) return L"Esc";   // 能显示，但会被 IsReservedHotkey 拒掉
+        return L"";
+    }
+
+    // 修饰键的规范顺序，空集合返回空串（录制时用于实时预览）
+    static std::wstring ModsToString(UINT mods) {
+        std::wstring s;
+        if (mods & MOD_WIN)     s += L"Win+";
+        if (mods & MOD_CONTROL) s += L"Ctrl+";
+        if (mods & MOD_ALT)     s += L"Alt+";
+        if (mods & MOD_SHIFT)   s += L"Shift+";
+        return s;
+    }
+
+    std::wstring ToString() const {
+        std::wstring key = KeyLabel(vk);
+        if (key.empty()) return L"";
+        return ModsToString(mods) + key;
+    }
+
+    // 返回 false 表示字符串不构成合法热键，调用方应回落默认值。
+    static bool Parse(const std::wstring& text, HotkeySpec& out) {
+        HotkeySpec r;
+        r.mods = 0;
+        r.vk = 0;
+        std::wstring cur;
+        std::wstring s = text + L"+";   // 末尾补一个分隔符，省掉收尾分支
+        for (wchar_t c : s) {
+            if (c != L'+') { cur.push_back(c); continue; }
+            std::wstring tok = ToLower(TrimW(cur));
+            cur.clear();
+            if (tok.empty()) return false;
+            if (tok == L"ctrl" || tok == L"control") { r.mods |= MOD_CONTROL; continue; }
+            if (tok == L"alt")                       { r.mods |= MOD_ALT; continue; }
+            if (tok == L"shift")                     { r.mods |= MOD_SHIFT; continue; }
+            if (tok == L"win" || tok == L"windows")  { r.mods |= MOD_WIN; continue; }
+            if (r.vk) return false;   // 两个主键
+            if (tok.size() == 1 && tok[0] >= L'a' && tok[0] <= L'z') r.vk = (UINT)(tok[0] - L'a' + L'A');
+            else if (tok.size() == 1 && tok[0] >= L'0' && tok[0] <= L'9') r.vk = (UINT)tok[0];
+            else if (tok == L"space") r.vk = VK_SPACE;
+            else if (tok == L"esc" || tok == L"escape") r.vk = VK_ESCAPE;
+            else if (tok[0] == L'f' && tok.size() >= 2 && tok.size() <= 3) {
+                int n = 0;
+                for (size_t i = 1; i < tok.size(); i++) {
+                    if (tok[i] < L'0' || tok[i] > L'9') return false;
+                    n = n * 10 + (tok[i] - L'0');
+                }
+                if (n < 1 || n > 24) return false;
+                r.vk = (UINT)(VK_F1 + n - 1);
+            } else return false;
+        }
+        if (r.mods == 0 || r.vk == 0) return false;
+        out = r;
+        return true;
+    }
+};
+
+// 不适合做全局热键的组合：应用自身的窗口级快捷键（注册成全局会把键从窗口手里抢走），
+// 以及 Alt+Tab / Alt+F4 这类人人依赖的系统习惯。录制时直接拒绝，而不是悄悄覆盖。
+inline bool IsReservedHotkey(UINT mods, UINT vk) {
+    if (vk == VK_ESCAPE) return true;
+    if (vk == VK_F4 && mods == MOD_ALT) return true;
+    if (vk == VK_TAB && (mods & MOD_ALT)) return true;
+    if ((mods & (MOD_CONTROL | MOD_ALT | MOD_WIN | MOD_SHIFT)) != MOD_CONTROL) return false;
+    return vk == 'S' || vk == VK_RETURN || vk == VK_SPACE;
+}
+
+
 // ---- 语言 ----
 extern std::atomic<bool> g_zh;
 inline const wchar_t* Tx(const wchar_t* zh, const wchar_t* en) { return g_zh.load(std::memory_order_relaxed) ? zh : en; }
@@ -150,6 +234,7 @@ struct Config {
     std::wstring whitelist  = L"qemu-system-i386, vmmemwsl";
 
     bool  hotkey            = true;
+    std::wstring hotkeyCombo = L"Ctrl+Shift+M";   // 语法见 HotkeySpec，老配置缺省即默认值
     bool  ecoQoS            = false;   // 后台抑制（EcoQoS + 内存优先级）
     bool  autostart         = false;
     bool  silent            = false;

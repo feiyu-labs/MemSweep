@@ -64,4 +64,10 @@ RenderSnap "system"    "light" "en" 1.5 "screenshot-system-en.png"
 RenderSnap "advanced"  "light" "en" 1.5 "screenshot-advanced-en.png"
 RenderSnap "about"     "light" "en" 1.5 "screenshot-about-en.png"
 
+# 4. Hotkey capture state (advanced sheet, recording in progress)
+$env:MEMSweep_CAPTURE = '1'
+RenderSnap "advanced" "light" "zh" 1.5 "screenshot-hotkey-zh.png"
+RenderSnap "advanced" "light" "en" 1.5 "screenshot-hotkey-en.png"
+Remove-Item Env:MEMSweep_CAPTURE -ErrorAction SilentlyContinue
+
 Write-Host "All screenshots generated successfully into $outDir!" -ForegroundColor Green

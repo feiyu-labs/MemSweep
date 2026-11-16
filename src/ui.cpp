@@ -151,7 +151,7 @@ enum CtlId {
     ID_BTN_THEME, ID_BTN_LANG,
     ID_SHEET_CLOSE, ID_SHEET_DISMISS,
     ID_HOME_PROCESS, ID_HOME_SYSTEM,
-    ID_TG_AUTO, ID_TG_HOTKEY, ID_TG_ECO, ID_TG_AUTOSTART, ID_TG_SILENT, ID_TG_IDLE_DEEP,
+    ID_TG_AUTO, ID_TG_HOTKEY, ID_HK_CHIP, ID_TG_ECO, ID_TG_AUTOSTART, ID_TG_SILENT, ID_TG_IDLE_DEEP,
     ID_SL_THRESH,
     ID_SYS_MC, ID_SYS_PC, ID_SYS_PF, ID_SYS_WSL, ID_SYS_EXPORT, ID_SYS_MORE,
     ID_SET_ADVANCED, ID_ADV_BACK, ID_SET_ABOUT, ID_SET_PROTECTED,
@@ -203,6 +203,13 @@ static bool s_idleDeep = false;
 static bool s_autostartInstalled = false;
 static volatile LONG g_autoBusy = 0;
 static int  s_threshold;
+
+// 热键录制（快捷键修改）
+static bool g_hkCapture = false;     // 正在等待用户按键
+static UINT g_hkLiveMods = 0;        // 仅按修饰键时的实时预览
+static int  g_hkErr = 0;             // 0 无 / 1 缺修饰键 / 2 应用占用 / 3 被系统占用
+static HotkeySpec g_hkSpec;          // 当前生效的组合键（解析自配置）
+static bool g_hkValid = false;       // g_hkSpec 是否真的注册在系统里
 
 // 编辑框
 static HWND g_edWL = nullptr;
@@ -303,7 +310,7 @@ struct Layout {
 
     // 高级
     RectF advMinLbl, advMinSeg[3], advIdleLbl, advIdleSeg[3];
-    RectF advHotkeyRow, advEcoRow;
+    RectF advHotkeyRow, advHotkeyChip, advEcoRow;
     RectF advIdleDeepRow, advBack;
 
     // 进程
@@ -430,7 +437,12 @@ static void BuildLayout(float w, float h, float dpi) {
             L.advIdleSeg[i] = RectF(bx + i * (mw + 8), sy + 146, mw, 30);
             AddHit((CtlId)(ID_ADV_IDLE_BASE + i), K_SEG, L.advIdleSeg[i]);
         }
-        L.advHotkeyRow = RectF(bx, sy + 196, bw, 36); AddHit(ID_TG_HOTKEY, K_TOGGLE, L.advHotkeyRow);
+        L.advHotkeyRow = RectF(bx, sy + 196, bw, 36);
+        // chip 在开关左侧：先注册命中，保证点在 chip 上不会触发整行开关
+        L.advHotkeyChip = RectF(L.advHotkeyRow.GetRight() - 44 - 10 - 104,
+                                L.advHotkeyRow.Y + 6, 104, 24);
+        AddHit(ID_HK_CHIP, K_BUTTON, L.advHotkeyChip);
+        AddHit(ID_TG_HOTKEY, K_TOGGLE, L.advHotkeyRow);
         L.advEcoRow = RectF(bx, sy + 244, bw, 36); AddHit(ID_TG_ECO, K_TOGGLE, L.advEcoRow);
         L.advIdleDeepRow = RectF(bx, sy + 292, bw, 42); AddHit(ID_TG_IDLE_DEEP, K_TOGGLE, L.advIdleDeepRow);
         return;
@@ -755,6 +767,7 @@ static int NearestIndex(int value, const int* values, int n) {
 static void SyncFromConfig() {
     s_auto = g_cfg.autoGuard;
     s_hotkey = g_cfg.hotkey;
+    if (!HotkeySpec::Parse(g_cfg.hotkeyCombo, g_hkSpec)) g_hkSpec = HotkeySpec();
     s_eco = g_cfg.ecoQoS;
     s_silent = g_cfg.silent;
     s_threshold = g_cfg.threshold;
@@ -776,6 +789,77 @@ static void SyncFromConfig() {
     if (g_edWL) SetWindowTextW(g_edWL, g_cfg.whitelist.c_str());
     g_coolDirty = g_minDirty = g_idleDirty = g_strengthDirty = false;
     g_anim.clear();
+}
+
+// 热键的唯一注册入口：先注销，再注册新的；失败时回滚到旧组合。
+// 任何地方都不要直接调用 RegisterHotKey，否则失败后会留下“热键消失”的状态。
+static void KickAnim();
+static bool RegisterHotkeyRaw(const HotkeySpec& s) {
+    return RegisterHotKey(g_hwnd, HOTKEY_ID, s.mods | MOD_NOREPEAT, s.vk) != FALSE;
+}
+static bool ApplyHotkey(const HotkeySpec& next, bool enable) {
+    const HotkeySpec prev = g_hkSpec;
+    const bool hadPrev = g_hkValid;          // 只有真的注册成功过，才谈得上回滚
+    UnregisterHotKey(g_hwnd, HOTKEY_ID);
+    g_hkValid = false;
+    if (!enable) return true;
+    // 最后一个关口：手改配置写进来的保留组合也不许注册（否则会抢掉系统习惯键）
+    if (IsReservedHotkey(next.mods, next.vk)) {
+        Log(L"热键 %s 属于保留组合，已忽略", next.ToString().c_str());
+        return false;
+    }
+    if (RegisterHotkeyRaw(next)) {
+        g_hkSpec = next;
+        g_hkValid = true;
+        Log(L"热键已注册 %s", next.ToString().c_str());
+        return true;
+    }
+    if (hadPrev && RegisterHotkeyRaw(prev)) {
+        g_hkSpec = prev;
+        g_hkValid = true;
+        Log(L"热键 %s 注册失败（被系统或其他程序占用），已保留 %s",
+            next.ToString().c_str(), prev.ToString().c_str());
+    } else {
+        Log(L"热键 %s 注册失败（被系统或其他程序占用）", next.ToString().c_str());
+    }
+    return false;
+}
+
+// 录制期间不注销现有热键，只在 WM_HOTKEY 里吞掉触发，
+// 这样改键过程中不会出现“热键短暂失效”的空窗。
+static void StartHotkeyCapture() {
+    if (g_hkCapture) return;
+    g_hkCapture = true;
+    g_hkLiveMods = 0;
+    g_hkErr = 0;
+    SetFocus(g_hwnd);
+    KickAnim();
+}
+static void CancelHotkeyCapture() {
+    if (!g_hkCapture) return;
+    g_hkCapture = false;
+    g_hkLiveMods = 0;
+    g_hkErr = 0;
+    KickAnim();
+}
+// 失败时停留在录制态：用户可以直接换一个组合，不必重新点 chip。
+static void CommitHotkeyCapture(UINT mods, UINT vk) {
+    if (!(mods & (MOD_CONTROL | MOD_ALT | MOD_SHIFT | MOD_WIN))) { g_hkErr = 1; KickAnim(); return; }
+    if (IsReservedHotkey(mods, vk)) { g_hkErr = 2; KickAnim(); return; }
+    HotkeySpec next;
+    next.mods = mods & (MOD_CONTROL | MOD_ALT | MOD_SHIFT | MOD_WIN);
+    next.vk = vk;
+    if (!ApplyHotkey(next, true)) { g_hkErr = 3; KickAnim(); return; }
+    g_hkCapture = false;
+    g_hkLiveMods = 0;
+    g_hkErr = 0;
+    s_hotkey = true;
+    g_cfg.hotkey = true;
+    g_cfg.hotkeyCombo = next.ToString();
+    SaveConfig();
+    g_toast = Tx(L"热键已更新为 ", L"Hotkey set to ") + next.ToString();
+    g_lastToastMs = GetTickCount64();
+    KickAnim();
 }
 
 static void CommitSettings() {
@@ -819,10 +903,15 @@ static void CommitSettings() {
     g_cfg.autostart = s_autostart;
     SaveConfig();
     RebuildWhitelist();
-    UnregisterHotKey(g_hwnd, HOTKEY_ID);
-    if (g_cfg.hotkey) {
-        if (!RegisterHotKey(g_hwnd, HOTKEY_ID, MOD_CONTROL | MOD_SHIFT, 'M'))
-            Log(L"热键 Ctrl+Shift+M 注册失败（可能被其他程序占用）");
+    if (g_hkValid) g_cfg.hotkeyCombo = g_hkSpec.ToString();
+    if (s_hotkey != g_hkValid && !ApplyHotkey(g_hkSpec, s_hotkey)) {
+        // 打开失败时开关回到真实状态，不让界面显示“已开启”却收不到热键
+        s_hotkey = false;
+        g_cfg.hotkey = false;
+        SaveConfig();
+        g_toast = Tx(L"热键被其他程序占用，已关闭", L"Hotkey is taken, turned off");
+        g_lastToastMs = GetTickCount64();
+        KickAnim();
     }
     if (s_autostart != s_autostartInstalled) SetAutostartAsync(s_autostart);
     if (!g_cfg.ecoQoS) RevertBackgroundTaming();
@@ -1209,8 +1298,12 @@ static void DrawHome(Graphics& g) {
         TextAt(g, tidying ? Tx(L"合并中…", L"Merging…")
                           : cleaning ? Tx(L"清理中…", L"Cleaning…") : Tx(L"立即清理", L"Clean now"),
                RectF(r.X + 24, r.Y, r.Width - 160, r.Height), f15b, T.btnText);
-        TextAt(g, L"Ctrl+Shift+M", RectF(r.X + r.Width - 140, r.Y, 118, r.Height),
-               f11, C(210, 8, 24, 18), StringAlignmentFar);
+        // 热键关闭时不显示提示，避免提示一个按了没用的组合键
+        if (s_hotkey) {
+            std::wstring hint = g_hkSpec.ToString();
+            TextAt(g, hint, RectF(r.X + r.Width - 160, r.Y, 138, r.Height),
+                   f11, C(210, 8, 24, 18), StringAlignmentFar);
+        }
     }
 
     TextAt(g, Tx(L"自动清理", L"Auto clean"), RectF(L.autoRow.X, L.autoRow.Y + 1,
@@ -1503,6 +1596,49 @@ static void DrawSettingsSheet(Graphics& g) {
            L.setAdvancedRow.Height), f15b, T.text3, StringAlignmentFar);
 }
 
+// 热键行：标签 + 组合键 chip + 开关。副标题平时给引导，出错时直接给原因，
+// 录制失败不弹窗——就近显示，用户还能马上重试。
+static void DrawAdvancedHotkeyRow(Graphics& g) {
+    const RectF& row = L.advHotkeyRow;
+    const RectF& chip = L.advHotkeyChip;
+    TextAt(g, Tx(L"全局热键", L"Global hotkey"), RectF(row.X, row.Y + 3, 150, 18), f12, T.text);
+
+    bool hover = g_hover == ID_HK_CHIP;
+    Color fill = g_hkCapture
+        ? C(32, T.accent.GetR(), T.accent.GetG(), T.accent.GetB())
+        : (hover ? T.trackFill : (g_dark ? C(255, 32, 36, 44) : C(255, 240, 242, 246)));
+    FillRound(g, chip, 8, fill);
+    StrokeRound(g, chip, 8, g_hkCapture ? T.accent : T.border, 1.0f);
+
+    std::wstring label;
+    Color txt;
+    if (g_hkCapture) {
+        label = g_hkLiveMods ? HotkeySpec::ModsToString(g_hkLiveMods) + L"…"
+                             : Tx(L"按下组合键…", L"Press keys…");
+        txt = T.accent;
+    } else {
+        label = g_hkSpec.ToString();
+        txt = s_hotkey ? T.text : T.text3;
+    }
+    TextAt(g, label, RectF(chip.X + 6, chip.Y, chip.Width - 12, chip.Height),
+           f11, txt, StringAlignmentCenter, StringAlignmentCenter, true);
+
+    DrawSwitch(g, row, s_hotkey, ToggleValue(ID_TG_HOTKEY, s_hotkey));
+
+    const wchar_t* subZh = L"点击组合键可修改";
+    const wchar_t* subEn = L"Click the keys to change";
+    Color subColor = T.text3;
+    switch (g_hkErr) {
+    case 1: subZh = L"需要包含 Ctrl、Alt、Shift 或 Win"; subEn = L"Add Ctrl, Alt, Shift or Win"; subColor = T.danger; break;
+    case 2: subZh = L"与 MemSweep 自己的快捷键冲突"; subEn = L"Clashes with a MemSweep shortcut"; subColor = T.danger; break;
+    case 3: subZh = L"已被系统或其他程序占用"; subEn = L"Already used by Windows or another app"; subColor = T.danger; break;
+    default:
+        if (g_hkCapture) { subZh = L"按 Esc 取消"; subEn = L"Esc to cancel"; subColor = T.accent; }
+        break;
+    }
+    TextAt(g, Tx(subZh, subEn), RectF(row.X, row.Y + 21, row.Width - 58, 15), f11, subColor);
+}
+
 static void DrawAdvancedSheet(Graphics& g) {
     DrawSheetFrame(g, L"高级设置", L"Advanced", true);
     TextAt(g, Tx(L"只清理大于", L"Min working set"), L.advMinLbl, f12, T.text2);
@@ -1513,8 +1649,7 @@ static void DrawAdvancedSheet(Graphics& g) {
     const wchar_t* idZh[3] = { L"1 分钟", L"5 分钟", L"10 分钟" };
     const wchar_t* idEn[3] = { L"1m", L"5m", L"10m" };
     DrawSeg(g, L.advIdleSeg, idZh, idEn, 3, g_idleSel);
-    DrawSwitchRow(g, L.advHotkeyRow, L"全局热键 Ctrl+Shift+M", L"Global hotkey Ctrl+Shift+M", s_hotkey,
-                  ToggleValue(ID_TG_HOTKEY, s_hotkey));
+    DrawAdvancedHotkeyRow(g);
     DrawSwitchRow(g, L.advEcoRow, L"后台效率模式", L"Efficiency mode", s_eco,
                   ToggleValue(ID_TG_ECO, s_eco));
     wchar_t idleSubZh[128] = {}, idleSubEn[128] = {};
@@ -1818,6 +1953,7 @@ static void FinishSheetAnim() {
 
 static void OpenSheet(Sheet s) {
     if (g_sheet == s) return;
+    CancelHotkeyCapture();
     HWND focus = GetFocus();
     if (focus && focus != g_hwnd && GetParent(focus) == g_hwnd) SetFocus(g_hwnd);
     HideEdits();
@@ -1842,6 +1978,7 @@ static void OpenSheet(Sheet s) {
 
 static void CloseSheet() {
     if (g_sheet == Sheet::None) return;
+    CancelHotkeyCapture();
     HideEdits();
     g_sheet = Sheet::None;
     g_sheetAnimating = false;
@@ -1984,6 +2121,7 @@ static void Activate(CtlId id) {
         ToggleAnimStart(ID_TG_AUTO);
         CommitSettings();
         break;
+    case ID_HK_CHIP: StartHotkeyCapture(); break;
     case ID_TG_HOTKEY: s_hotkey = !s_hotkey; ToggleAnimStart(ID_TG_HOTKEY); CommitSettings(); break;
     case ID_TG_ECO: s_eco = !s_eco; ToggleAnimStart(ID_TG_ECO); CommitSettings(); break;
     case ID_TG_SILENT: s_silent = !s_silent; ToggleAnimStart(ID_TG_SILENT); CommitSettings(); break;
@@ -2477,7 +2615,8 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         return 0;
     }
     case WM_HOTKEY:
-        if (wp == HOTKEY_ID) RequestManualClean(false);
+        // 录制期间不响应，否则改键时按到旧组合会直接触发清理
+        if (wp == HOTKEY_ID && !g_hkCapture) RequestManualClean(false);
         return 0;
     case WM_CTLCOLORSTATIC: {
         HDC hdc = (HDC)wp;
@@ -2509,7 +2648,30 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         if (y < L.titlebar.Height) return HTCAPTION;
         return HTCLIENT;
     }
+    case WM_SYSKEYDOWN:
     case WM_KEYDOWN: {
+        if (g_hkCapture) {
+            // 录制态优先于一切快捷键：Esc 取消，纯修饰键只做实时预览，
+            // 其余按键立即尝试提交（成功/失败都由 CommitHotkeyCapture 决定去留）。
+            UINT mods = 0;
+            if (GetKeyState(VK_CONTROL) & 0x8000) mods |= MOD_CONTROL;
+            if (GetKeyState(VK_MENU) & 0x8000) mods |= MOD_ALT;
+            if (GetKeyState(VK_SHIFT) & 0x8000) mods |= MOD_SHIFT;
+            if ((GetKeyState(VK_LWIN) & 0x8000) || (GetKeyState(VK_RWIN) & 0x8000)) mods |= MOD_WIN;
+            if (wp == VK_ESCAPE) { CancelHotkeyCapture(); return 0; }
+            bool modifier = wp == VK_CONTROL || wp == VK_SHIFT || wp == VK_MENU ||
+                            wp == VK_LCONTROL || wp == VK_RCONTROL || wp == VK_LSHIFT ||
+                            wp == VK_RSHIFT || wp == VK_LMENU || wp == VK_RMENU ||
+                            wp == VK_LWIN || wp == VK_RWIN;
+            if (modifier) {
+                g_hkLiveMods = mods;
+                g_hkErr = 0;
+                KickAnim();
+                return 0;
+            }
+            CommitHotkeyCapture(mods, (UINT)wp);
+            return 0;
+        }
         bool ctrl = (GetKeyState(VK_CONTROL) & 0x8000) != 0;
         if (wp == VK_ESCAPE) {
             if (g_sheet != Sheet::None) {
@@ -2525,6 +2687,10 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         if (ctrl && wp == 'S') { CommitSettings(); return 0; }
         break;
     }
+    case WM_KILLFOCUS:
+        // 录制中切走（点别的窗口、Alt+Tab）就放弃，避免“看不见的录制态”
+        if (GetFocus() != hwnd) CancelHotkeyCapture();
+        break;
     case WM_CLOSE:
         g_hiddenAt = GetTickCount64();
         ShowWindow(hwnd, SW_HIDE);
@@ -3214,6 +3380,15 @@ int RenderUISnapshot(const std::wstring& path) {
     g_gaugeTarget = (float)s.m.loadPct;
     s_auto = g_cfg.autoGuard; s_idleDeep = g_cfg.idleDeep;
     s_hotkey = g_cfg.hotkey; s_eco = g_cfg.ecoQoS; s_silent = g_cfg.silent;
+    if (!HotkeySpec::Parse(g_cfg.hotkeyCombo, g_hkSpec)) g_hkSpec = HotkeySpec();
+    {
+        // 无头渲染录制态：MEMSweep_CAPTURE=1（配合 MEMSweep_SHEET=advanced）
+        wchar_t cap[8] = {};
+        if (GetEnvironmentVariableW(L"MEMSweep_CAPTURE", cap, 8) && _wcsicmp(cap, L"1") == 0) {
+            g_hkCapture = true;
+            g_hkLiveMods = MOD_CONTROL;
+        }
+    }
     s_threshold = g_cfg.threshold; g_sliderValue = (float)g_cfg.threshold;
     s_autostart = g_cfg.autostart;
     float scale = 1.0f;
@@ -3316,17 +3491,30 @@ int RunUI(HINSTANCE hInst, bool showOnStart) {
     g_trayOn = true;
     TrayUpdate(true);
 
-    // 热键
+    // 热键：先按配置，失败回落默认组合，再失败才关闭（并写回配置，避免每次启动重试）
     if (g_cfg.hotkey) {
-        if (!RegisterHotKey(hwnd, HOTKEY_ID, MOD_CONTROL | MOD_SHIFT, 'M'))
-            Log(L"热键 Ctrl+Shift+M 注册失败（可能被其他程序占用）");
+        if (!ApplyHotkey(g_hkSpec, true)) {
+            HotkeySpec def;
+            if (ApplyHotkey(def, true)) {
+                g_hkSpec = def;
+                g_cfg.hotkeyCombo = def.ToString();
+                SaveConfig();
+            } else {
+                g_cfg.hotkey = false;
+                s_hotkey = false;
+                SaveConfig();
+            }
+        }
     }
 
     // 首次运行或手动启动（无 /tray）→ 显示面板；开机计划任务带 /tray → 静默托盘
     bool firstRun = GetFileAttributesW(ConfigPath().c_str()) == INVALID_FILE_ATTRIBUTES;
     if (firstRun || showOnStart) {
         BringMainToFront();
-        g_toast = Tx(L"欢迎使用 MemSweep · 按 Ctrl+Shift+M 随时清理", L"Welcome to MemSweep · Ctrl+Shift+M cleans anytime");
+        std::wstring welcome = Tx(L"欢迎使用 MemSweep · 按 ", L"Welcome to MemSweep · ");
+        welcome += s_hotkey ? g_hkSpec.ToString() + Tx(L" 随时清理", L" cleans anytime")
+                            : std::wstring(Tx(L"Ctrl+Enter 随时清理", L"Ctrl+Enter cleans anytime"));
+        g_toast = welcome;
         g_lastToastMs = GetTickCount64();
         if (firstRun) SaveConfig();
     }

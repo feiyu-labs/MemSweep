@@ -161,12 +161,23 @@ build.cmd test     :: dev + /selftest + /idlecheck + /uipng + /checkpng
 - 新增策略逻辑必须同步加入 `/selftest`。
 - 不引入第三方运行时；不新增网络/驱动/服务。
 
+### 热键不变量
+
+- 只允许通过 `ApplyHotkey()` 注册/注销；失败时回滚到上一个**确实注册成功**的组合
+  （`g_hkValid` 记录真实状态，不能拿“配置里的值”冒充旧值）。
+- 配置只在注册成功后写入，避免“配置是新键、系统里是旧键”的分裂。
+- 录制期间**不注销**热键，改由 `WM_HOTKEY` 在 `g_hkCapture` 时吞掉触发，
+  避免热键短暂失效的空窗；录制中切走窗口（`WM_KILLFOCUS`）必须放弃录制。
+- 保留组合（`Alt+Tab`、`Alt+F4`、`Ctrl+S`、`Ctrl+Enter`、`Ctrl+Space`、`Esc`）由
+  `IsReservedHotkey()` 统一拒绝，`ApplyHotkey()` 做最后把关，防止手改配置绕过界面。
+- 组合键的解析/格式化是纯函数（`HotkeySpec`），改动必须同步 `/selftest` 用例。
+
 ## 7. 发布检查清单
 
 - [ ] `build.cmd test` PASS，零警告
 - [ ] `/selftest`、`/dryrun` 目录正确（保护名单不出现）
 - [ ] 手动清理前后指标与保护验证
-- [ ] 托盘/热键/主题/系统 Sheet/导出诊断
+- [ ] 托盘/热键（改键、占用回落、Esc 取消）/主题/系统 Sheet/导出诊断
 - [ ] 主屏/设置/系统 Sheet Private < 20MB，Ping < 50ms（150% DPI）
 - [ ] Sheet 200ms 后无额外位图/定时器，空闲无持续 60fps
 - [ ] 安装版 SHA256 与 dist 一致

@@ -109,11 +109,21 @@ The interface is a single 520×600 window. Settings, processes and system status
 
 MemSweep also reports the state of memory compression, page combining, SysMain, the pagefile and commit charge, with one-click repair for the first two if something else has disabled them.
 
+### Changing the hotkey
+
+The clean hotkey is yours to change. Open **Settings → Advanced → Global hotkey**, click the key chip, and press the combination you want. Holding only the modifiers previews `Ctrl+Alt…` without committing, `Esc` keeps the previous combination, and clicking away cancels.
+
+The combination is validated against Windows rather than guessed: a missing modifier, a reserved key (`Alt+Tab`, `Alt+F4`, MemSweep's own `Ctrl+S`) or a combination another program already owns are each reported under the row, and recording stays open so you can simply try another. If a new combination cannot be registered, the previous one keeps working — the setting is only saved once registration succeeds.
+
+<p align="center">
+  <img src="docs/screenshot-hotkey-en.png" alt="Recording a new hotkey" width="380">
+</p>
+
 ---
 
 ## Install
 
-Download `MemSweep-v1.9.11-x64.zip` or `MemSweep-v1.9.11-arm64.zip` from [Releases](https://github.com/feiyu-labs/MemSweep/releases/latest), extract it, then right-click `install.cmd` and choose **Run as administrator**.
+Download `MemSweep-v1.9.12-x64.zip` or `MemSweep-v1.9.12-arm64.zip` from [Releases](https://github.com/feiyu-labs/MemSweep/releases/latest), extract it, then right-click `install.cmd` and choose **Run as administrator**.
 
 The script copies `MemSweep.exe` to `C:\Program Files\MemSweep\`, registers a logon scheduled task with the highest privileges available (so startup never shows a UAC prompt), creates a desktop shortcut and starts MemSweep in the tray.
 

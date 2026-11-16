@@ -242,6 +242,17 @@ void LoadConfig() {
     // 空字符串是合法值：用户清空保护名单时必须保留，不能回退到默认 VM 名单
     if (has(L"whitelist")) g_cfg.whitelist = get(L"whitelist");
     g_cfg.hotkey          = getB(L"hotkey", true);
+    {
+        // 组合键存字符串；被改坏时回落默认值而不是让应用起不来。
+        HotkeySpec hk;
+        std::wstring v = get(L"hotkeycombo");
+        if (!v.empty() && HotkeySpec::Parse(v, hk)) g_cfg.hotkeyCombo = hk.ToString();
+        else {
+            g_cfg.hotkeyCombo = HotkeySpec().ToString();
+            if (!v.empty()) Log(L"配置项 hotkeyCombo=\"%s\" 无效，已回落 %s", v.c_str(),
+                                g_cfg.hotkeyCombo.c_str());
+        }
+    }
     g_cfg.ecoQoS          = getB(L"ecoqos", false);
     g_cfg.autostart       = getB(L"autostart", false);
     g_cfg.silent          = getB(L"silent", false);
@@ -284,6 +295,7 @@ void SaveConfig() {
     s += L"whitelist=" + c.whitelist + L"\n\n";
     s += L"[advanced]\n";
     s += std::wstring(L"hotkey=") + (c.hotkey ? L"1" : L"0") + L"\n";
+    s += L"hotkeyCombo=" + c.hotkeyCombo + L"\n";
     s += std::wstring(L"ecoQoS=") + (c.ecoQoS ? L"1" : L"0") + L"\n";
     WriteTextUtf8(ConfigPath(), s);
 }
@@ -1461,6 +1473,28 @@ bool SelfTest() {
     // 格式化
     chk(FormatBytes(1536ULL * MB) == L"1.5 GB", L"FormatBytes GB");
     chk(FormatInt(1234567) == L"1,234,567", L"FormatInt");
+
+    // 热键字符串：解析、规范化与拒绝规则
+    {
+        HotkeySpec hk;
+        chk(HotkeySpec().ToString() == L"Ctrl+Shift+M", L"hotkey default format");
+        chk(HotkeySpec::Parse(L"ctrl+shift+m", hk) && hk.ToString() == L"Ctrl+Shift+M", L"hotkey parse lowercase");
+        chk(HotkeySpec::Parse(L" Shift + Ctrl + m ", hk) && hk.ToString() == L"Ctrl+Shift+M", L"hotkey parse order/space");
+        chk(HotkeySpec::Parse(L"Win+Alt+F5", hk) && hk.ToString() == L"Win+Alt+F5", L"hotkey parse F5");
+        chk(HotkeySpec::Parse(L"Ctrl+Space", hk) && hk.vk == VK_SPACE, L"hotkey parse space");
+        chk(HotkeySpec::Parse(L"Ctrl+Esc", hk) && hk.ToString() == L"Ctrl+Esc", L"hotkey parse esc");
+        chk(IsReservedHotkey(MOD_CONTROL, VK_ESCAPE), L"hotkey rejects esc combos");
+        chk(!HotkeySpec::Parse(L"M", hk), L"hotkey rejects bare key");
+        chk(!HotkeySpec::Parse(L"Ctrl+Shift", hk), L"hotkey rejects modifiers only");
+        chk(!HotkeySpec::Parse(L"Ctrl+K+L", hk), L"hotkey rejects two keys");
+        chk(!HotkeySpec::Parse(L"Hyper+K", hk), L"hotkey rejects unknown token");
+        chk(!HotkeySpec::Parse(L"Ctrl+F99", hk), L"hotkey rejects out-of-range F key");
+        chk(IsReservedHotkey(MOD_CONTROL, 'S') && IsReservedHotkey(MOD_CONTROL, VK_RETURN),
+            L"hotkey reserves app shortcuts");
+        chk(IsReservedHotkey(MOD_ALT, VK_F4) && IsReservedHotkey(MOD_ALT, VK_TAB),
+            L"hotkey reserves alt+f4/alt+tab");
+        chk(!IsReservedHotkey(MOD_CONTROL | MOD_ALT, 'S'), L"hotkey allows Ctrl+Alt+S");
+    }
 
     Log(L"[selftest] %s", ok ? L"PASS" : L"FAIL");
     return ok;
