@@ -787,19 +787,13 @@ static void CommitSettings() {
     std::wstring wl = buf;
     if (wl.empty() && !g_wlDraft.empty()) wl = g_wlDraft;
     {
-        std::vector<std::wstring> names = SplitCSV(wl);
         std::vector<std::wstring> canon;
-        for (auto n : names) {
-            if (n.size() > 4 && n.compare(n.size() - 4, 4, L".exe") == 0) n.resize(n.size() - 4);
-            if (n.empty()) continue;
-            if (std::find(canon.begin(), canon.end(), n) == canon.end()) canon.push_back(n);
+        for (auto raw : SplitCSV(wl)) {
+            std::wstring n = NormalizeProcName(raw);
+            if (!n.empty() && std::find(canon.begin(), canon.end(), n) == canon.end())
+                canon.push_back(n);
         }
-        std::wstring joined;
-        for (size_t i = 0; i < canon.size(); i++) {
-            if (i) joined += L", ";
-            joined += canon[i];
-        }
-        g_cfg.whitelist = joined;
+        g_cfg.whitelist = JoinCSV(canon);
     }
     g_cfg.autostart = s_autostart;
     SaveConfig();
@@ -1247,10 +1241,10 @@ static int g_procScroll = 0;
 // 名字按精确名去 .exe、小写；系统与 VM 内置保护显示为锁，不可切换。
 static void BuildProcessRows() {
     std::unordered_map<std::wstring, ProcRow> byName;
+    byName.reserve(g_drawSnap.procs.size());
     for (const auto& p : g_drawSnap.procs) {
         if (p.pid <= 4 || p.pid == GetCurrentProcessId() || p.name.empty()) continue;
-        std::wstring n = ToLower(p.name);
-        if (n.size() > 4 && n.compare(n.size() - 4, 4, L".exe") == 0) n.resize(n.size() - 4);
+        std::wstring n = NormalizeProcName(p.name);
         if (n.empty()) continue;
         unsigned long long w = ProcPrivateWS(p);
         auto it = byName.find(n);
@@ -1265,8 +1259,8 @@ static void BuildProcessRows() {
             byName[n] = r;
         }
     }
-    for (auto n : SplitCSV(g_cfg.whitelist)) {
-        if (n.size() > 4 && n.compare(n.size() - 4, 4, L".exe") == 0) n.resize(n.size() - 4);
+    for (auto raw : SplitCSV(g_cfg.whitelist)) {
+        std::wstring n = NormalizeProcName(raw);
         if (n.empty()) continue;
         auto it = byName.find(n);
         if (it != byName.end()) {
@@ -1279,7 +1273,7 @@ static void BuildProcessRows() {
     }
     g_procList.clear();
     g_procList.reserve(byName.size());
-    for (auto& kv : byName) g_procList.push_back(kv.second);
+    for (auto& kv : byName) g_procList.push_back(std::move(kv.second));
     // 切换保护不改变排序，避免行在鼠标下跳走
     std::sort(g_procList.begin(), g_procList.end(), [](const ProcRow& a, const ProcRow& b) {
         if (a.ws != b.ws) return a.ws > b.ws;
@@ -1288,11 +1282,7 @@ static void BuildProcessRows() {
 }
 
 static void CommitWhitelist(std::vector<std::wstring> v) {
-    std::wstring joined;
-    for (size_t i = 0; i < v.size(); i++) {
-        if (i) joined += L", ";
-        joined += v[i];
-    }
+    const std::wstring joined = JoinCSV(v);
     g_cfg.whitelist = joined;
     g_wlDraft = joined;
     SaveConfig();
@@ -1303,13 +1293,10 @@ static void CommitWhitelist(std::vector<std::wstring> v) {
 }
 
 static void ToggleProtected(const std::wstring& name) {
-    std::wstring n = ToLower(TrimW(name));
-    if (n.size() > 4 && n.compare(n.size() - 4, 4, L".exe") == 0) n.resize(n.size() - 4);
+    std::wstring n = NormalizeProcName(name);
     if (n.empty()) return;
     std::vector<std::wstring> v = SplitCSV(g_cfg.whitelist);
-    for (auto& e : v) {
-        if (e.size() > 4 && e.compare(e.size() - 4, 4, L".exe") == 0) e.resize(e.size() - 4);
-    }
+    for (auto& e : v) e = NormalizeProcName(e);
     auto it = std::find(v.begin(), v.end(), n);
     if (it != v.end()) v.erase(it);
     else v.push_back(n);
@@ -1320,8 +1307,6 @@ static void DrawProcessSheet(Graphics& g) {
     DrawSheetFrame(g, L"进程", L"Processes", g_procFromSettings);
     RefreshDrawSnap();
     BuildProcessRows();
-    int protCount = 0;
-    for (const auto& r : g_procList) if (r.st == ProcState::Protected) protCount++;
     TextAt(g, Tx(L"点击右侧「保护」，清理时跳过该应用——不释放它的内存",
                  L"Click Protect to skip this app when cleaning - its memory is left alone"),
            L.procSub, f11, T.text3);

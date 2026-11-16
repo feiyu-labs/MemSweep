@@ -4,7 +4,7 @@
 [![Release](https://img.shields.io/github/v/release/feiyu-labs/MemSweep)](https://github.com/feiyu-labs/MemSweep/releases/latest)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 
-> 单文件 ~403KB · 主屏约 12MB / 托盘约 9MB（私有） · 零依赖 · 无网络无遥测 · 前台免疫 · UI 永不阻塞的 Windows 智能内存守护
+> 单文件 ~392KB · 主屏约 9.5MB / 托盘约 3–6MB（专用工作集） · 零依赖 · 无网络无遥测 · 前台免疫 · UI 永不阻塞的 Windows 智能内存守护
 
 MemSweep 是为「重度开发机内存常年 90%+」场景设计的现代内存清理器。它把 2026 年全网内存清理方案
 （Mem Reduct / WinMemoryCleaner / Process Lasso SmartTrim / ISLC / RAMKeeper / WinMemClean 等）
@@ -62,7 +62,7 @@ MemSweep 是为「重度开发机内存常年 90%+」场景设计的现代内存
 ### One Screen（v1.6 重构，v1.7 打磨）
 
 - **520×600 单窗口**：没有顶部三页导航，没有设置子页；右上角设置按钮打开一层 Sheet
-- **品牌标记**：标题栏 M 标记与 `res/icon.ico` 共用同一套 256 网格几何，9 个尺寸（16–256）逐尺寸渲染
+- **品牌标记**：标题栏 M 标记与 `res/icon.ico` 共用同一套 256 网格几何；ico 含 16/20/24/32/48/256 六个关键尺寸，其余由 Windows 缩放
 - **主屏只有 4 组**：状态句、仪表盘、主操作、两个低权重文字入口
   - `内存充足 / 内存偏高 / 内存紧张` 代替“当前内存”技术标题
   - 细环 + 百分比 + 沿弧滑过的高光（7s 一圈，静止也有生命感）；
@@ -79,11 +79,11 @@ MemSweep 是为「重度开发机内存常年 90%+」场景设计的现代内存
 
 ![settings](docs/screenshot-settings.png)
 
-### 关于（v1.9.10）
+### 关于（v1.9.11）
 
 设置页底部「关于 MemSweep」或托盘右键 →「关于 MemSweep…」打开：
 
-- 品牌标记 + 版本/架构（`v1.9.10 · x64`）
+- 品牌标记 + 版本/架构（`v1.9.11 · x64`）
 - GitHub 仓库 / 问题反馈 / 检查更新（用系统浏览器打开，应用自身不联网）
 - `MIT License · 不联网 · 不收集数据 · © 2026 feiyu-labs`
 
@@ -178,7 +178,7 @@ MemSweep 是为「重度开发机内存常年 90%+」场景设计的现代内存
 - 窗口为 **无边框自绘**（无原生标题栏），Win11 DWM 圆角 + 阴影
 - 若面板被全屏游戏遮挡，会弹托盘气泡提示 `Alt+Tab`
 - **键盘**：`Esc` 关闭 Sheet / 隐藏、`Ctrl+Enter` 立即清理、`Ctrl+S` 立即保存当前设置
-- **内存**：主屏 **约 12MB 私有 / 17MB 工作集**；托盘隐藏 **约 9MB 私有**（隐藏即释放双缓冲 + HeapCompact，工作集可降到 3–8MB）；特权按需开启；全部窗口禁用 IME 注入
+- **内存**（任务管理器「专用工作集」口径）：主屏 **约 9.5MB**（工作集 17MB，含 2.8MB 双缓冲），托盘稳定后 **约 3MB**（私有提交约 9.6MB；隐藏即释放双缓冲 + HeapCompact，空闲后系统回收工作集）；特权按需开启；全部窗口禁用 IME 注入
 
 ---
 
@@ -259,7 +259,7 @@ uninstall.cmd        :: 右键 → 以管理员身份运行
 - **Slint / egui**：原生 Rust UI，但常驻约 **30–95MB / 100–185MB**，且需要重写现有 C++ 引擎。
   仅在未来要跨平台时才值得评估 Slint。
 - **WinUI 3**：复杂应用实测 WS 约 155MB，还要 Windows App SDK；不符合轻量托盘工具。
-- **C++/Win32 + GDI+（当前）**：**约 12MB private / 17MB WS**（主屏）、**约 9MB / 8MB**（全新托盘），零额外运行时。
+- **C++/Win32 + GDI+（当前）**：**约 9.5MB 专用工作集 / 17MB WS**（主屏）；托盘稳定后约 3MB（私有提交 9.6MB），零额外运行时。
   520×600 窗口下 GDI+ 足够；若未来过渡帧率不够，再加 Direct2D/DirectWrite + DirectComposition，
   仍然不引入 WebView。
 
@@ -288,8 +288,8 @@ uninstall.cmd        :: 右键 → 以管理员身份运行
 
 ### 当前部署状态（2026-11-15）
 
-- 安装位置：`C:\Program Files\MemSweep\MemSweep.exe`（**v1.9.10.0**，413,184 字节）
-- SHA256：`A91009AFA47FDEA732BE550B88EA019CE769EADA9C16D482466DCF51A02EA10A`
+- 安装位置：`C:\Program Files\MemSweep\MemSweep.exe`（**v1.9.11.0**，401,920 字节）
+- SHA256：`FE2441AD3F7D86E99FC49FA153A3655A365CBD20B7CFA46FD29F10FBEB484FA3`
 - 计划任务：`MemSweep`（登录触发 / HighestAvailable / 电池供电可启动 / 无限执行时限）
 - `WinMemoryCleaner`：**已彻底移除**（进程/任务/winget 包/ARP/注册表/快捷方式/残留目录）
 - 主题：浅色（面板底部 自动/浅色/深色，已验证点击生效）
@@ -345,13 +345,13 @@ build.cmd arm64    :: Windows on ARM 交叉编译
 
 ## 🧪 工程与质量（v1.7）
 
-- 编译告警：`-Wall -Wextra -Wshadow -Wformat=2 -Wundef -Wpointer-arith`，**零警告**
+- 编译告警：`-Wall -Wextra -Wshadow -Wformat=2 -Wundef -Wpointer-arith -Werror`，**零警告**
 - `build.cmd test` 一键回归（策略自检 / 空闲诊断 / 双界面快照）
 - 工程规范：[docs/ENGINEERING.md](docs/ENGINEERING.md) · [CHANGELOG.md](CHANGELOG.md) · `.editorconfig` · `.clang-format`
 - 崩溃记录：`SetUnhandledExceptionFilter` 写入 `CRASH exception=...`
 - 线程纪律：UI 线程不做 PowerShell/WMI/schtasks；`SysState` 本地快照 + `SRWLOCK` 换入
 - 内存治理：托盘图标节流、隐藏释放双缓冲、GDI+ 字体缓存、全部窗口禁用 IME 注入
-- 体积：**348KB** 单文件（356,352 字节，静态链接、零运行时依赖）
+- 体积：**392KB** 单文件（401,920 字节，静态链接、零运行时依赖）
 
 ## ❓ FAQ
 

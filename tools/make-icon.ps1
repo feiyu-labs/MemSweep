@@ -1,9 +1,10 @@
-# Renders the MemSweep mark at 9 sizes and packs res/icon.ico (PNG-compressed entries).
+# Renders the MemSweep mark at 6 key sizes and packs res/icon.ico (PNG-compressed entries).
 # Keep the 256-grid geometry identical to DrawBrandMark() in src/ui.cpp.
 $ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName System.Drawing
 $outIco = Join-Path $PSScriptRoot '..\res\icon.ico'
-$sizes = @(16, 20, 24, 32, 40, 48, 64, 128, 256)
+# 16/20/24/32 for shell + 48 for Explorer + 256 for large views; Windows scales the rest.
+$sizes = @(16, 20, 24, 32, 48, 256)
 $pngs = @()
 $preview = [System.Drawing.Bitmap]::new(1480, 330)
 $pg = [System.Drawing.Graphics]::FromImage($preview)

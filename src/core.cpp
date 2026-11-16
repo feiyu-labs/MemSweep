@@ -571,8 +571,9 @@ static bool IsIdle(DWORD pid) {
 // ---------------------------------------------------------------------------
 // 保护判定
 // ---------------------------------------------------------------------------
-static const std::unordered_set<std::wstring>& BuiltinProtect() {
-    static const std::unordered_set<std::wstring> s = {
+// 顺序表比 unordered_set 更省启动分配与代码；24 项的线性比较可忽略。
+static bool IsBuiltinName(const std::wstring& n) {
+    static const wchar_t* const kBuiltin[] = {
         L"system", L"smss", L"csrss", L"wininit", L"winlogon", L"services",
         L"lsass", L"lsm", L"svchost", L"dwm", L"explorer", L"fontdrvhost",
         L"audiodg", L"sihost", L"ctfmon", L"memcompression", L"memory compression", L"conhost",
@@ -580,15 +581,16 @@ static const std::unordered_set<std::wstring>& BuiltinProtect() {
         // VM/虚拟化内存是客户机热数据，修剪会导致 guest 大范围缺页，始终硬保护
         L"qemu-system-i386", L"qemu-system-x86_64", L"vmmemwsl"
     };
-    return s;
+    for (const wchar_t* b : kBuiltin) if (n == b) return true;
+    return false;
 }
 static std::unordered_set<std::wstring> g_whitelistSet;
 void RebuildWhitelist() {
     Config c = GetConfigSnapshot();
     std::unordered_set<std::wstring> next;
-    for (auto n : SplitCSV(c.whitelist)) {
-        // 手输 chrome.exe 与 chrome 等价：集合里统一去掉后缀，匹配才一致
-        if (n.size() > 4 && n.compare(n.size() - 4, 4, L".exe") == 0) n.resize(n.size() - 4);
+    for (auto raw : SplitCSV(c.whitelist)) {
+        // 手输 chrome.exe 与 chrome 等价：集合里统一口径，匹配才一致
+        std::wstring n = NormalizeProcName(raw);
         if (!n.empty()) next.insert(n);
     }
     EnterCriticalSection(&g_lock);
@@ -620,10 +622,8 @@ static std::unordered_set<DWORD> BuildProtectedPids(const Snapshot& s) {
 bool IsProtectedProcess(const ProcInfo& p, const std::unordered_set<DWORD>& protectedPids) {
     if (p.pid <= 4 || p.pid == g_selfPid) return true;
     if (p.name.empty()) return true;
-    std::wstring low = ToLower(p.name);
-    if (low.size() > 4 && low.compare(low.size() - 4, 4, L".exe") == 0)
-        low.resize(low.size() - 4);          // 快照自带 .exe 后缀，名单不带
-    if (BuiltinProtect().count(low)) return true;
+    std::wstring low = NormalizeProcName(p.name);   // 快照自带 .exe 后缀，名单不带
+    if (IsBuiltinName(low)) return true;
     EnterCriticalSection(&g_lock);
     bool wl = g_whitelistSet.count(low) != 0;
     LeaveCriticalSection(&g_lock);
@@ -1320,16 +1320,14 @@ bool TrimPid(DWORD pid) {
     return ok != 0;
 }
 bool IsBuiltinProtectedName(const std::wstring& name) {
-    std::wstring low = ToLower(name);
-    if (low.size() > 4 && low.compare(low.size() - 4, 4, L".exe") == 0) low.resize(low.size() - 4);
-    return !low.empty() && BuiltinProtect().count(low) != 0;
+    std::wstring low = NormalizeProcName(name);
+    return !low.empty() && IsBuiltinName(low);
 }
 
 bool IsProtectedName(const std::wstring& name) {
-    std::wstring low = ToLower(name);
-    if (low.size() > 4 && low.compare(low.size() - 4, 4, L".exe") == 0) low.resize(low.size() - 4);
+    std::wstring low = NormalizeProcName(name);
     if (low.empty()) return true;
-    if (BuiltinProtect().count(low)) return true;
+    if (IsBuiltinName(low)) return true;
     EnterCriticalSection(&g_lock);
     bool wl = g_whitelistSet.count(low) != 0;
     LeaveCriticalSection(&g_lock);

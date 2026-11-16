@@ -122,7 +122,10 @@ build.cmd test     :: dev + /selftest + /idlecheck + /uipng + /checkpng
 - **托盘纪律**：图标只在整数百分比变化时重建（DIB+GDI+ 绘制开销大）；
   tooltip 变化走 `NIF_TIP` 轻量更新；`Shell_NotifyIcon` IPC 不进入每秒路径。
 - **体积纪律**：`-Oz + gc-sections + strip` 为该工具链实测最优；已否决
-  `-falign-*`/`-fmerge-all-constants`（零收益）与 unwind 表移除（CRT `.seh_` 编译失败）。
+  `-falign-*`/`-fmerge-all-constants`（零收益）、unwind 表移除（CRT `.seh_` 编译失败）、
+  `--icf`/`--build-id=none`/`--no-insert-timestamp`/`-stdlib=libc++`（不支持或无收益）、
+  `-fno-threadsafe-statics`（省 512B，但静态初始化有并发风险）。ico 只保留
+  16/20/24/32/48/256 六个关键尺寸；进程名统一走 `NormalizeProcName`。
 - **标题栏控件清单**：新增标题栏按钮必须同步四处——`Layout` 矩形、`BuildLayout` 命中、
   `DrawChrome` 绘制、**`WM_NCHITTEST` 的 `HTCLIENT` 排除清单**（漏掉会被 `HTCAPTION`
   拖拽吞掉点击，v1.9.3 教训）。
@@ -135,7 +138,7 @@ build.cmd test     :: dev + /selftest + /idlecheck + /uipng + /checkpng
   `g_cfg.whitelist`，任一入口修改后另一入口必须同步（`SetWindowTextW`）。
 - **品牌标记单一来源**：`DrawBrandMark`（256 网格、squircle r56、M 圆头折线 stroke 36）同时服务
   标题栏/关于页；`res/icon.ico` 的生成脚本必须使用同一组坐标与颜色。改标记必须同步两处，
-  并重新生成九个尺寸（16–256）——不要只放一张 256 PNG 让系统缩放。
+  并重新生成六个关键尺寸（16/20/24/32/48/256）——不要只放一张 256 PNG 让系统缩放。
 
 ## 5.1 线程模型
 

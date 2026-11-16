@@ -2,8 +2,8 @@
 #pragma once
 
 // 单一版本源：UI 关于页、诊断导出、日志共用；资源文件 res/app.rc 仍需手动同步。
-#define MEMSWEEP_VERSION      L"1.9.10"
-#define MEMSWEEP_VERSION_FULL L"1.9.10.0"
+#define MEMSWEEP_VERSION      L"1.9.11"
+#define MEMSWEEP_VERSION_FULL L"1.9.11.0"
 
 
 #define WIN32_LEAN_AND_MEAN
@@ -62,6 +62,12 @@ inline std::wstring TrimW(const std::wstring& s) {
     if (a == std::wstring::npos) return L"";
     size_t b = s.find_last_not_of(L" \t\r\n");
     return s.substr(a, b - a + 1);
+}
+// 进程名统一口径：去空白、转小写、去 .exe；名单/内置保护/进程表共用。
+inline std::wstring NormalizeProcName(const std::wstring& name) {
+    std::wstring s = ToLower(TrimW(name));
+    if (s.size() > 4 && s.compare(s.size() - 4, 4, L".exe") == 0) s.resize(s.size() - 4);
+    return s;
 }
 inline std::vector<std::wstring> SplitCSV(const std::wstring& s) {
     std::vector<std::wstring> out;
