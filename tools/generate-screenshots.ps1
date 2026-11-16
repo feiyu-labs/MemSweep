@@ -34,37 +34,25 @@ function RenderSnap($sheet, $theme, $lang, $scale, $targetName) {
 
 Write-Host "Rendering official MemSweep screenshots (150% DPI)..." -ForegroundColor Cyan
 
-# 1. Main Home Screen (Bilingual x Dual-Theme)
+# 只生成 README 实际引用的文件：尺寸与语言一一对应，仓库里不留没人用的图。
+
+# 1. Home screen: bilingual x dual theme
 RenderSnap "" "light" "zh" 1.5 "screenshot-home-light-zh.png"
 RenderSnap "" "dark"  "zh" 1.5 "screenshot-home-dark-zh.png"
 RenderSnap "" "light" "en" 1.5 "screenshot-home-light-en.png"
 RenderSnap "" "dark"  "en" 1.5 "screenshot-home-dark-en.png"
 
-# Legacy compatibility aliases
-Copy-Item (Join-Path $outDir "screenshot-home-light-zh.png") (Join-Path $outDir "screenshot-light.png") -Force
-Copy-Item (Join-Path $outDir "screenshot-home-dark-zh.png")  (Join-Path $outDir "screenshot-dark.png") -Force
-
 # 2. Sheets: Chinese
 RenderSnap "settings"  "light" "zh" 1.5 "screenshot-settings-zh.png"
 RenderSnap "processes" "light" "zh" 1.5 "screenshot-processes-zh.png"
 RenderSnap "system"    "light" "zh" 1.5 "screenshot-system-zh.png"
-RenderSnap "advanced"  "light" "zh" 1.5 "screenshot-advanced-zh.png"
-RenderSnap "about"     "light" "zh" 1.5 "screenshot-about-zh.png"
-
-Copy-Item (Join-Path $outDir "screenshot-settings-zh.png")  (Join-Path $outDir "screenshot-settings.png") -Force
-Copy-Item (Join-Path $outDir "screenshot-processes-zh.png") (Join-Path $outDir "screenshot-processes.png") -Force
-Copy-Item (Join-Path $outDir "screenshot-system-zh.png")    (Join-Path $outDir "screenshot-system-check.png") -Force
-Copy-Item (Join-Path $outDir "screenshot-advanced-zh.png")  (Join-Path $outDir "screenshot-advanced.png") -Force
-Copy-Item (Join-Path $outDir "screenshot-about-zh.png")     (Join-Path $outDir "screenshot-about.png") -Force
 
 # 3. Sheets: English
 RenderSnap "settings"  "light" "en" 1.5 "screenshot-settings-en.png"
 RenderSnap "processes" "light" "en" 1.5 "screenshot-processes-en.png"
 RenderSnap "system"    "light" "en" 1.5 "screenshot-system-en.png"
-RenderSnap "advanced"  "light" "en" 1.5 "screenshot-advanced-en.png"
-RenderSnap "about"     "light" "en" 1.5 "screenshot-about-en.png"
 
-# 4. Hotkey capture state (advanced sheet, recording in progress)
+# 4. Hotkey recording state (advanced sheet)
 $env:MEMSweep_CAPTURE = '1'
 RenderSnap "advanced" "light" "zh" 1.5 "screenshot-hotkey-zh.png"
 RenderSnap "advanced" "light" "en" 1.5 "screenshot-hotkey-en.png"
