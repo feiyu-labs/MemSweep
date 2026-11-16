@@ -9,7 +9,7 @@
 </p>
 
 <p align="center">
-  <strong>A Windows memory cleaner that reclaims idle background memory and leaves running applications alone.</strong>
+  <strong>Windows memory cleaner. It reclaims memory from idle background processes and leaves what you're using alone.</strong>
 </p>
 
 <p align="center">
@@ -44,7 +44,7 @@
 
 ## What it is
 
-MemSweep reclaims memory held by idle background processes, so the applications you are working in keep their speed. It ships as a single executable: no drivers, no services, no network access, and no system changes you did not ask for.
+MemSweep reclaims memory that idle background processes are holding, so what you're using keeps running normally. It's one executable: no drivers, no services, no network, and no system changes you didn't ask for.
 
 | | |
 |:---|:---|
@@ -55,12 +55,12 @@ MemSweep reclaims memory held by idle background processes, so the applications 
 
 ## Features
 
-- **Cleans idle background processes only.** The focused window, its parent process chain, anything focused in the last two minutes, and system or virtualisation services are excluded; a background process needs five minutes of near-idle CPU before it becomes a candidate.
-- **Triggers when memory is actually tight.** Used memory above your threshold, and available memory below 512 MB or 95% in use. RAM parked in the standby list is normal Windows behaviour and does not trigger a pass.
-- **Does not run operations that can freeze the system.** No modified-page flush, no registry-cache flush, no global working-set sweep, no timer changes, no process termination.
-- **Can merge duplicate physical pages.** Manual only; aborts on your first keypress.
-- **Stays quiet in fullscreen and quiet hours.** No notifications over games, presentations or Focus Assist; automatic passes report only when they free memory.
-- **One file, no runtime dependencies.** 403 KB, 3.0 MB in the tray, two themes, two languages, a remappable hotkey.
+- **It only cleans idle background processes.** The window you're using, the processes it started, and anything you touched in the last two minutes are left alone. A background process has to sit at near-zero CPU for five minutes before it's considered.
+- **It cleans when memory is tight.** Your threshold has to be crossed, and memory has to be short: under 512 MB available, or 95% in use. RAM sitting in the standby list is normal Windows behaviour, not a shortage.
+- **It won't run operations that freeze Windows.** No modified-page flush, no registry-cache flush, no global working-set sweep, no timer changes, no killing processes.
+- **Duplicate pages can be merged.** Identical physical pages become one copy; it's manual, and pressing any key stops it.
+- **It stays quiet while you game or present.** No notifications during fullscreen games, presentations or Focus Assist, and automatic passes speak up only when they actually free memory.
+- **It's a 403 KB executable.** Nothing to install, about 3 MB in the tray, light and dark themes, English and Chinese, a hotkey you can change.
 
 <table align="center">
   <tr>
@@ -149,14 +149,14 @@ The pinned compiler is zig 0.17.1: place it in `../tools/` next to the repositor
 
 ## FAQ
 
-**The percentage in Task Manager did not drop after cleaning.**
-That figure counts in-use physical pages. When background processes are protected or recently active, MemSweep reclaims standby cache instead, which shortens the next allocation rather than moving the percentage.
+**The percentage didn't drop after cleaning.**
+That number counts in-use physical pages. When background processes are busy or protected, MemSweep reclaims standby cache instead, which shortens the next allocation rather than moving the percentage.
 
 **Can it lower committed memory?**
-No. Commit is virtual memory promised to applications; trimming moves pages between RAM, standby and the pagefile. To lower it, close applications or reduce heap limits (`-Xmx`, `--max-old-space-size`).
+No. Commit is memory the system promised to applications; trimming moves pages between RAM, standby and the pagefile. Close applications or lower heap limits (`-Xmx`, `--max-old-space-size`) to reduce it.
 
 **Why does it need administrator rights?**
-Purging standby lists and trimming the file cache are privileged NT operations. The installer registers a logon task, so daily use never prompts.
+Purging standby lists and trimming the file cache need system privileges. The installer registers a logon task, so daily use never prompts.
 
 ## Privacy
 
