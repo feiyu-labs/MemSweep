@@ -58,4 +58,13 @@ jobs:
         shell: pwsh
         run: |
           $files = Get-ChildItem -Name 'MemSweep-*.zip', 'MemSweep-*.zip.sha256'
-          gh release create $env:GITHUB_REF_NAME @files --generate-notes --title "MemSweep $env:GITHUB_REF_NAME"
+          # 双语发布说明优先：docs/release-notes/<tag>.md；没有该文件才退回自动生成的 notes。
+          $notes = Join-Path 'docs/release-notes' "$env:GITHUB_REF_NAME.md"
+          $title = "MemSweep $env:GITHUB_REF_NAME"
+          if (Test-Path $notes) {
+            Write-Host "using release notes: $notes"
+            gh release create $env:GITHUB_REF_NAME @files --notes-file $notes --title $title
+          } else {
+            Write-Host "no release notes file, falling back to generated notes"
+            gh release create $env:GITHUB_REF_NAME @files --generate-notes --title $title
+          }
