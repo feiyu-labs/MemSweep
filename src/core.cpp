@@ -25,6 +25,10 @@ ULONGLONG g_lastAutoCleanMs = 0;
 std::atomic<ULONGLONG> g_lastFreeGain{0};
 std::atomic<ULONGLONG> g_lastAvailGain{0};
 std::atomic<ULONGLONG> g_lastCleanTickMs{0};
+// 上一次清理是否由自动模式发起：界面用它区分「上次清理 / 上次自动清理」
+std::atomic<bool> g_lastCleanWasAuto{false};
+// 自动清理的托盘提示节流：只报有实际收益的那几次
+static std::atomic<ULONGLONG> g_lastAutoNotifyMs{0};
 std::atomic<double> g_hfPerSec{0.0};
 std::atomic<bool> g_gameMode{false};
 std::atomic<unsigned long long> g_reclaimableBytes{0};
@@ -983,22 +987,30 @@ static DWORD WINAPI CleanThreadProc(LPVOID param) {
     if (isAuto) {
         g_lastAutoCleanMs = GetTickCount64();
     }
+    g_lastCleanWasAuto.store(isAuto, std::memory_order_relaxed);
     g_lastFreeGain = r.freeGain;
     g_lastAvailGain = r.availGain;
     g_lastCleanTickMs = GetTickCount64();
 
     LogCleanResult(isAuto ? L"自动" : L"手动", (size_t)r.candidates, r);
 
-    if (!isAuto && g_hwnd && !cfg.silent) {
-        // 通知口径对齐同赛道产品（WinMemoryCleaner: "freed ~X"）：
-        // “已释放约 X”取空闲/可用净增的较大者，单指标、不堆术语。
-        unsigned long long shown = r.freeGain > r.availGain ? r.freeGain : r.availGain;
+    // 通知口径对齐同赛道产品（WinMemoryCleaner: "freed ~X"）：
+    // “已释放约 X”取空闲/可用净增的较大者，单指标、不堆术语。
+    // 自动模式只报有实际收益的那几次：空跑报“释放 0MB”只是噪音。
+    unsigned long long shown = r.freeGain > r.availGain ? r.freeGain : r.availGain;
+    bool autoQuiet = isAuto && !ShouldNotifyAutoClean(
+        shown, GetTickCount64() - g_lastAutoNotifyMs.load(),
+        g_hwnd && IsWindowVisible(g_hwnd) != FALSE, cfg.silent);
+    if (g_hwnd && !cfg.silent && !autoQuiet) {
         wchar_t info[320];
         if (r.combined && r.pagesCombined)
             swprintf(info, 320, Tx(r.combineAborted ? L"深度清理已中止，已释放约 %s，可用 %s"
                                                     : L"深度清理完成，已释放约 %s，可用 %s",
                                    r.combineAborted ? L"Deep clean stopped, freed about %s, %s available"
                                                     : L"Deep clean done, freed about %s, %s available"),
+                     FormatBytes(shown).c_str(), FormatBytes(r.availAfter).c_str());
+        else if (isAuto)
+            swprintf(info, 320, Tx(L"自动清理：已释放约 %s，可用 %s", L"Auto clean: freed about %s, %s available"),
                      FormatBytes(shown).c_str(), FormatBytes(r.availAfter).c_str());
         else if (shown >= 16ULL * MB)
             swprintf(info, 320, Tx(L"已释放约 %s，可用 %s", L"Freed about %s, %s available"),
@@ -1007,6 +1019,7 @@ static DWORD WINAPI CleanThreadProc(LPVOID param) {
             swprintf(info, 320, Tx(L"清理完成，可用 %s", L"Done, %s available"),
                      FormatBytes(r.availAfter).c_str());
         PostMessageW(g_hwnd, WM_APP_BALLOON, 0, (LPARAM)new std::wstring(info));
+        if (isAuto) g_lastAutoNotifyMs.store(GetTickCount64());
     }
     if (g_hwnd) {
         PostMessageW(g_hwnd, WM_APP_CLEANING, 0, 0);
@@ -1494,6 +1507,17 @@ bool SelfTest() {
         chk(IsReservedHotkey(MOD_ALT, VK_F4) && IsReservedHotkey(MOD_ALT, VK_TAB),
             L"hotkey reserves alt+f4/alt+tab");
         chk(!IsReservedHotkey(MOD_CONTROL | MOD_ALT, 'S'), L"hotkey allows Ctrl+Alt+S");
+    }
+
+    // 自动清理提示策略：有收益、不静默、面板隐藏、且十分钟内没报过
+    {
+        const unsigned long long gap = 11ULL * 60 * 1000;
+        chk(!ShouldNotifyAutoClean(0, gap, false, false), L"auto notify skips zero gain");
+        chk(!ShouldNotifyAutoClean(32ULL * MB, gap, false, false), L"auto notify skips small gain");
+        chk(ShouldNotifyAutoClean(128ULL * MB, gap, false, false), L"auto notify on real gain");
+        chk(!ShouldNotifyAutoClean(128ULL * MB, 60 * 1000, false, false), L"auto notify respects gap");
+        chk(!ShouldNotifyAutoClean(128ULL * MB, gap, true, false), L"auto notify quiet when panel visible");
+        chk(!ShouldNotifyAutoClean(128ULL * MB, gap, false, true), L"auto notify quiet in silent mode");
     }
 
     Log(L"[selftest] %s", ok ? L"PASS" : L"FAIL");

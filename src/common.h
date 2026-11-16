@@ -2,8 +2,8 @@
 #pragma once
 
 // 单一版本源：UI 关于页、诊断导出、日志共用；资源文件 res/app.rc 仍需手动同步。
-#define MEMSWEEP_VERSION      L"1.9.12"
-#define MEMSWEEP_VERSION_FULL L"1.9.12.0"
+#define MEMSWEEP_VERSION      L"1.9.13"
+#define MEMSWEEP_VERSION_FULL L"1.9.13.0"
 
 
 #define WIN32_LEAN_AND_MEAN
@@ -201,6 +201,18 @@ inline bool IsReservedHotkey(UINT mods, UINT vk) {
     if (vk == VK_TAB && (mods & MOD_ALT)) return true;
     if ((mods & (MOD_CONTROL | MOD_ALT | MOD_WIN | MOD_SHIFT)) != MOD_CONTROL) return false;
     return vk == 'S' || vk == VK_RETURN || vk == VK_SPACE;
+}
+
+// ---- 自动清理的提示策略 ----
+// 自动清理每 30 秒就可能跑一次，全都弹气泡只会变成噪音：
+// 只有真正回收了足够的内存才提醒，且十分钟内最多一次；面板开着时界面里已经能看到结果。
+constexpr unsigned long long kAutoNotifyMinGain = 64ULL * 1024 * 1024;
+constexpr unsigned long long kAutoNotifyGapMs   = 10ULL * 60 * 1000;
+inline bool ShouldNotifyAutoClean(unsigned long long gain, unsigned long long sinceLastNotifyMs,
+                                  bool windowVisible, bool silent) {
+    if (silent || windowVisible) return false;
+    if (gain < kAutoNotifyMinGain) return false;
+    return sinceLastNotifyMs >= kAutoNotifyGapMs;
 }
 
 

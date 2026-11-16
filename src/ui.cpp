@@ -1310,7 +1310,8 @@ static void DrawHome(Graphics& g) {
            L.autoRow.Width - 58, 19), f12, T.text);
     {
         wchar_t sub2[64];
-        swprintf(sub2, 64, s_auto ? Tx(L"已开启 · 高于 %d%% 时清理", L"on · cleans above %d%%")
+        swprintf(sub2, 64, s_auto ? Tx(L"已开启 · 高于 %d%% 时清理可回收的后台内存",
+                                       L"on · reclaims idle background above %d%%")
                                   : Tx(L"已关闭", L"off"), s_threshold);
         TextAt(g, sub2, RectF(L.autoRow.X, L.autoRow.Y + 20, L.autoRow.Width - 58, 15), f11, T.text3);
     }
@@ -1330,8 +1331,14 @@ static void DrawHome(Graphics& g) {
                                       ? g_lastFreeGain.load() : g_lastAvailGain.load();
         if (freedShown >= 16ULL * MB)
             swprintf(gain, 64, Tx(L"释放 %s", L"freed %s"), FormatBytes(freedShown).c_str());
-        if (gain[0]) swprintf(last, 256, Tx(L"上次清理 %s · %s", L"last clean %s · %s"), when, gain);
-        else swprintf(last, 256, Tx(L"上次清理 %s", L"last clean %s"), when);
+        // 自动与手动的来源要写清楚：只写“上次清理”会让人以为是自己点的那次
+        const bool wasAuto = g_lastCleanWasAuto.load(std::memory_order_relaxed);
+        if (gain[0])
+            swprintf(last, 256, wasAuto ? Tx(L"上次自动清理 %s · %s", L"last auto clean %s · %s")
+                                        : Tx(L"上次清理 %s · %s", L"last clean %s · %s"), when, gain);
+        else
+            swprintf(last, 256, wasAuto ? Tx(L"上次自动清理 %s", L"last auto clean %s")
+                                        : Tx(L"上次清理 %s", L"last clean %s"), when);
     } else {
         wcscpy(last, Tx(L"尚未清理", L"not cleaned yet"));
     }

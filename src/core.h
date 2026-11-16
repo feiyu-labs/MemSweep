@@ -53,6 +53,7 @@ extern ULONGLONG g_lastAutoCleanMs;
 extern std::atomic<ULONGLONG> g_lastFreeGain;   // 真正空闲页的净增量（用户可感知）
 extern std::atomic<ULONGLONG> g_lastAvailGain;  // 可用内存净增量（含待机缓存）
 extern std::atomic<ULONGLONG> g_lastCleanTickMs;
+extern std::atomic<bool> g_lastCleanWasAuto;   // 上次清理是否来自自动模式
 extern std::atomic<double> g_hfPerSec;
 extern std::atomic<bool> g_gameMode;           // 全屏/演示模式，自动清理暂停
 extern std::atomic<unsigned long long> g_reclaimableBytes; // 可回收估算（低优/全量缓存 + 空闲候选私有WS）

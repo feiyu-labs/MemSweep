@@ -66,6 +66,8 @@ MemSweep 面向的是常年贴着内存上限工作的 Windows 工作站：IDE�
 
 自动清理的触发条件有两个：内存占用高于你设定的阈值，**并且**系统确实快用完了——可用低于 512 MB，或已用超过 95%。Windows 把空闲内存用作已缓存是正常机制，不是内存不足，MemSweep 不会把它当成信号。这一条区分的正是"能帮上忙的工具"和"会自己循环的工具"。
 
+自动清理真的回收到了东西（64 MB 以上）时，托盘会告诉你一次——十分钟内最多一次，面板开着时不打扰，静默模式下完全不发声。什么也没找到的那几次一个字都不说；按钮下面那行会写明上一次是自动清理还是你自己点的。
+
 ### 正在用的东西一律不碰
 
 当前焦点窗口、它的完整父进程链、两分钟内获得过焦点的应用，以及关键系统服务与虚拟机，都不会被修剪；最近五分钟内有活动的进程同样排除在外。候选只有工作集超过 128 MB、CPU 近乎零增长的后台进程。同一个进程十分钟内不会重复修剪，除非它的工作集又涨了五成以上。
@@ -123,7 +125,7 @@ MemSweep 还会读取内存压缩、页面合并、SysMain、分页文件与已�
 
 ## 安装
 
-从 [Releases](https://github.com/feiyu-labs/MemSweep/releases/latest) 下载 `MemSweep-v1.9.12-x64.zip` 或 `MemSweep-v1.9.12-arm64.zip`，解压后右键 `install.cmd`，选择**以管理员身份运行**。
+从 [Releases](https://github.com/feiyu-labs/MemSweep/releases/latest) 下载 `MemSweep-v1.9.13-x64.zip` 或 `MemSweep-v1.9.13-arm64.zip`，解压后右键 `install.cmd`，选择**以管理员身份运行**。
 
 脚本会把 `MemSweep.exe` 复制到 `C:\Program Files\MemSweep\`，注册一个最高权限的登录计划任务（因此开机不会弹 UAC），创建桌面快捷方式，并让 MemSweep 进入托盘。
 

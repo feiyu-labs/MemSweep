@@ -66,6 +66,8 @@ It does one job: when the system is genuinely short on memory, it returns pages 
 
 Automatic cleaning runs only when memory use is above your threshold **and** the system is actually running out — less than 512 MB available, or 95% of RAM in use. Windows keeping free RAM on the standby list is normal behaviour, not a shortage, and MemSweep does not treat it as one. This is the difference between a tool that helps and a tool that loops.
 
+When an automatic pass actually reclaims something (64 MB or more) the tray reports it — at most once every ten minutes, never while the panel is open, and never in silent mode. Passes that find nothing to do stay completely quiet, and the line under the button says whether the last run was automatic or one you started.
+
 ### It leaves what you are using alone
 
 The focused window, its parent process chain, anything that had focus in the last two minutes, and critical system and virtualisation services are never trimmed. Neither are processes that were active in the last five minutes: only background processes with a working set above 128 MB and near-zero CPU time are candidates. A process is not trimmed twice within ten minutes unless it has grown by half again.
@@ -123,7 +125,7 @@ The combination is validated against Windows rather than guessed: a missing modi
 
 ## Install
 
-Download `MemSweep-v1.9.12-x64.zip` or `MemSweep-v1.9.12-arm64.zip` from [Releases](https://github.com/feiyu-labs/MemSweep/releases/latest), extract it, then right-click `install.cmd` and choose **Run as administrator**.
+Download `MemSweep-v1.9.13-x64.zip` or `MemSweep-v1.9.13-arm64.zip` from [Releases](https://github.com/feiyu-labs/MemSweep/releases/latest), extract it, then right-click `install.cmd` and choose **Run as administrator**.
 
 The script copies `MemSweep.exe` to `C:\Program Files\MemSweep\`, registers a logon scheduled task with the highest privileges available (so startup never shows a UAC prompt), creates a desktop shortcut and starts MemSweep in the tray.
 
