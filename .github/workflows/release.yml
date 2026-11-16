@@ -10,7 +10,7 @@ jobs:
   release:
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Install zig 0.17.1
         shell: pwsh
@@ -27,8 +27,12 @@ jobs:
       - name: Build x64 + ARM64
         shell: cmd
         run: |
-          build.cmd release
-          build.cmd arm64
+          rem Batch-to-batch calls must use CALL; without it the first
+          rem build.cmd ends this script and arm64 never runs.
+          call build.cmd release
+          if errorlevel 1 exit /b 1
+          call build.cmd arm64
+          if errorlevel 1 exit /b 1
 
       - name: Package
         shell: pwsh
