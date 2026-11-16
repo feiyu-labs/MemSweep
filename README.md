@@ -9,7 +9,7 @@
 </p>
 
 <p align="center">
-  <strong>Reclaim memory without interrupting your work.</strong>
+  <strong>A Windows memory cleaner that reclaims idle background memory and leaves running applications alone.</strong>
 </p>
 
 <p align="center">
@@ -44,9 +44,7 @@
 
 ## What it is
 
-MemSweep reclaims memory held by idle background processes when Windows is under real pressure, so the applications you are working in keep their speed.
-
-It leaves out what makes other cleaners unreliable: no modified-page flushes, no global working-set sweeps, no process termination, no background services, no network access.
+MemSweep reclaims memory held by idle background processes, so the applications you are working in keep their speed. It ships as a single executable: no drivers, no services, no network access, and no system changes you did not ask for.
 
 | | |
 |:---|:---|
@@ -57,12 +55,12 @@ It leaves out what makes other cleaners unreliable: no modified-page flushes, no
 
 ## Features
 
-- **Reclaims from the background, never the foreground.** The focused window, its parent process chain, anything focused in the last two minutes, and system or virtualisation services are excluded from every pass. A background process joins the candidate list after five minutes of near-idle CPU.
-- **Decides on pressure, not on a percentage.** A pass starts when your threshold is crossed *and* the system is short: under 512 MB available, or 95% in use. Memory parked on the standby list is normal Windows behaviour, not a signal to clean.
-- **Skips every operation that causes freezes.** No modified-page flush, no registry-cache flush, no global `MemoryEmptyWorkingSets`, no timer-resolution changes, no terminating processes.
-- **Merges duplicate physical pages on request**, with a kernel handle that aborts on your first keypress.
-- **Never interrupts.** No notifications while a fullscreen game, a presentation or Focus Assist is active; automatic passes report only when they actually free memory.
-- **One window, no dependencies.** 403 KB, 3.0 MB in the tray, two themes, two languages, a hotkey you can remap.
+- **Cleans idle background processes only.** The focused window, its parent process chain, anything focused in the last two minutes, and system or virtualisation services are excluded; a background process needs five minutes of near-idle CPU before it becomes a candidate.
+- **Triggers when memory is actually tight.** Used memory above your threshold, and available memory below 512 MB or 95% in use. RAM parked in the standby list is normal Windows behaviour and does not trigger a pass.
+- **Does not run operations that can freeze the system.** No modified-page flush, no registry-cache flush, no global working-set sweep, no timer changes, no process termination.
+- **Can merge duplicate physical pages.** Manual only; aborts on your first keypress.
+- **Stays quiet in fullscreen and quiet hours.** No notifications over games, presentations or Focus Assist; automatic passes report only when they free memory.
+- **One file, no runtime dependencies.** 403 KB, 3.0 MB in the tray, two themes, two languages, a remappable hotkey.
 
 <table align="center">
   <tr>
