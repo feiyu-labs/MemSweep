@@ -662,7 +662,13 @@ static void TrayUpdate(bool force) {
         tip += L" · " + std::wstring(Tx(L"上次清理 ", L"cleaned ")) + when;
     }
     wcsncpy(g_nid.szTip, tip.c_str(), 127);
-    Shell_NotifyIconW(g_trayOn ? NIM_MODIFY : NIM_ADD, &g_nid);
+    BOOL added = Shell_NotifyIconW(g_trayOn ? NIM_MODIFY : NIM_ADD, &g_nid);
+    if (!g_trayOn && added) {
+        // NIM_ADD 之后必须重新声明 v4：explorer 重启（TaskbarCreated）重建图标时
+        // 回调退回 v0 打包，不声明的话左键打不开面板、右键菜单坐标也会错。
+        g_nid.uVersion = NOTIFYICON_VERSION_4;
+        Shell_NotifyIconW(NIM_SETVERSION, &g_nid);
+    }
     g_trayOn = true;
 }
 static void TrayRemove() {
