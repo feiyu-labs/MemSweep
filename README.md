@@ -14,7 +14,7 @@
   <a href="https://github.com/feiyu-labs/MemSweep/releases/latest"><img src="https://img.shields.io/github/v/release/feiyu-labs/MemSweep?color=emerald" alt="Release"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue.svg" alt="License: MIT"></a>
   <img src="https://img.shields.io/badge/Platform-Windows%2010%2F11%20(x64%20%7C%20ARM64)-blue" alt="Platform">
-  <img src="https://img.shields.io/badge/Binary%20Size-~401%20KB-success" alt="Size">
+  <img src="https://img.shields.io/badge/Binary%20Size-~403%20KB-success" alt="Size">
   <img src="https://img.shields.io/badge/Tray%20RAM-~3.0%20MB-success" alt="Memory">
   <img src="https://img.shields.io/badge/Telemetry-Zero%20%2F%20100%25%20Offline-green" alt="No Telemetry">
 </p>
@@ -27,12 +27,20 @@
 
 <table align="center">
   <tr>
-    <td align="center"><b>Light Theme / 浅色主题</b></td>
-    <td align="center"><b>Dark Theme / 深色主题</b></td>
+    <th align="center"><b>Light · 简体中文</b></th>
+    <th align="center"><b>Dark · 简体中文</b></th>
   </tr>
   <tr>
-    <td><img src="docs/screenshot-light.png" alt="MemSweep Light" width="380"></td>
-    <td><img src="docs/screenshot-dark.png" alt="MemSweep Dark" width="380"></td>
+    <td><img src="docs/screenshot-home-light-zh.png" alt="MemSweep Light (Chinese)" width="380"></td>
+    <td><img src="docs/screenshot-home-dark-zh.png" alt="MemSweep Dark (Chinese)" width="380"></td>
+  </tr>
+  <tr>
+    <th align="center"><b>Light · English</b></th>
+    <th align="center"><b>Dark · English</b></th>
+  </tr>
+  <tr>
+    <td><img src="docs/screenshot-home-light-en.png" alt="MemSweep Light (English)" width="380"></td>
+    <td><img src="docs/screenshot-home-dark-en.png" alt="MemSweep Dark (English)" width="380"></td>
   </tr>
 </table>
 
@@ -46,7 +54,7 @@
 
 Instead of fighting Windows' internal caching mechanisms, MemSweep synthesizes the best ideas from decades of memory management tools (Mem Reduct, Process Lasso SmartTrim, ISLC, WinMemoryCleaner) into a **safe, tiered, intelligent engine**. It tames runaway background Electron/IDE processes while providing strict immunity to foreground applications, and completely eliminates the crashes, disk write storms, and stuttering caused by legacy tools.
 
-- **Zero Runtime Dependencies**: Pure C++20, Win32, and GDI+. No .NET, no WebView2, no Electron. Single standalone binary (~401 KB x64 / ~338 KB ARM64).
+- **Zero Runtime Dependencies**: Pure C++20, Win32, and GDI+. No .NET, no WebView2, no Electron. Single standalone binary (~403 KB x64 / ~339 KB ARM64).
 - **Featherweight Resident Footprint**: ~9.5 MB Private Working Set when open (includes 150% DPI double-buffer); drops to **~3.0 MB** when idle in the system tray.
 - **Strictly Safe by Design**: **Never** force-flushes modified pages (no SSD wear or freezing), **never** kills processes, and **never** touches your active foreground window.
 - **100% Offline & Private**: Zero telemetry, zero network access, and zero background ads.
@@ -57,7 +65,7 @@ Instead of fighting Windows' internal caching mechanisms, MemSweep synthesizes t
 
 | Feature / Metric | MemSweep | Mem Reduct | WinMemoryCleaner | Process Lasso (SmartTrim) | ISLC |
 |:---|:---:|:---:|:---:|:---:|:---:|
-| **Binary Size** | **~401 KB** (Standalone) | ~350 KB | ~10 MB (.NET) | ~80 MB (Full Suite) | ~1.5 MB |
+| **Binary Size** | **~403 KB** (Standalone) | ~350 KB | ~10 MB (.NET) | ~80 MB (Full Suite) | ~1.5 MB |
 | **Tray Resident RAM** | **~3.0 MB** (Private WS) | ~4.5 MB | ~35 MB+ | ~45 MB+ | ~18 MB |
 | **Foreground App Immunity** | ✅ **Full (Window + Parent + 120s History)** | ❌ None | ❌ None | ⚠️ Exclusion list only | ❌ None |
 | **True Depletion Trigger** | ✅ **Yes** (Free < 512MB or Used ≥ 95%) | ❌ Threshold only | ❌ Flawed (Free < 82% freeze loop) | ⚠️ Generic threshold | ⚠️ Standby size only |
@@ -89,12 +97,12 @@ Instead of fighting Windows' internal caching mechanisms, MemSweep synthesizes t
 
 <table align="center">
   <tr>
-    <td align="center"><b>Settings Sheet / 设置面板</b></td>
-    <td align="center"><b>Process & Protection / 进程保护</b></td>
+    <td align="center"><b>Settings Sheet</b></td>
+    <td align="center"><b>Processes & Protection Sheet</b></td>
   </tr>
   <tr>
-    <td><img src="docs/screenshot-settings.png" alt="Settings Sheet" width="380"></td>
-    <td><img src="docs/screenshot-processes.png" alt="Processes Sheet" width="380"></td>
+    <td><img src="docs/screenshot-settings-en.png" alt="Settings Sheet (English)" width="380"></td>
+    <td><img src="docs/screenshot-processes-en.png" alt="Processes Sheet (English)" width="380"></td>
   </tr>
 </table>
 
@@ -104,6 +112,7 @@ Instead of fighting Windows' internal caching mechanisms, MemSweep synthesizes t
 
 ### 4. "One Screen" Fluent Design
 - **Frameless 520×600 Window**: Hardware-accelerated GDI+ double-buffering, Windows 11 DWM rounded corners, and soft drop shadows.
+- **Twin Foundation Cards**: The bottom of the main screen houses two balanced micro-cards displaying live Top 1 memory consumer (e.g. `idea64 · 3.2 GB`) and overall system health at a glance, anchoring the layout and eliminating dead space.
 - **Calm Interaction**: No multi-page maze or complex tabs. Settings, Process Management, and System Status open as compact, smooth modal sheets (200ms ease-out transitions).
 - **Measured CPU Budget**: Ambient gauge sweep runs at a deliberate 6.7 fps, consuming less than 1.6% of a single CPU core when visible, and 0% when hidden in tray.
 - **Instant Dual-Theme & Bilingual Toggle**: Toggle Dark/Light theme or Switch English/Chinese directly from the title bar with a single click.
@@ -114,12 +123,12 @@ Instead of fighting Windows' internal caching mechanisms, MemSweep synthesizes t
 
 <table align="center">
   <tr>
-    <td align="center"><b>System Diagnostics / 系统状态</b></td>
-    <td align="center"><b>Advanced Settings / 高级设置</b></td>
+    <td align="center"><b>System Diagnostics Sheet</b></td>
+    <td align="center"><b>Advanced Settings Sheet</b></td>
   </tr>
   <tr>
-    <td><img src="docs/screenshot-system-check.png" alt="System Status" width="380"></td>
-    <td><img src="docs/screenshot-advanced.png" alt="Advanced Settings" width="380"></td>
+    <td><img src="docs/screenshot-system-en.png" alt="System Diagnostics (English)" width="380"></td>
+    <td><img src="docs/screenshot-advanced-en.png" alt="Advanced Settings (English)" width="380"></td>
   </tr>
 </table>
 
@@ -228,7 +237,7 @@ Windows 自身的内存管理机制在常规办公下非常完善，但在重度
 
 MemSweep 汲取了过去二十年经典内存工具（Mem Reduct、Process Lasso SmartTrim、ISLC、WinMemoryCleaner）的工程经验，剔除会导致系统死锁、频繁卡顿、误伤前台与刷盘损坏 SSD 的陈旧做法，凝聚为一套**安全、分层、自适应的智能内存调度引擎**。
 
-- **极致原生，零第三方运行时**：纯 C++20 + Win32 + GDI+ 双缓冲，无 .NET、无 WebView2、无 Electron。单文件仅 **~401 KB**（ARM64 仅 ~338 KB）。
+- **极致原生，零第三方运行时**：纯 C++20 + Win32 + GDI+ 双缓冲，无 .NET、无 WebView2、无 Electron。单文件仅 **~403 KB**（ARM64 仅 ~339 KB）。
 - **极小常驻，静默无感**：界面打开时专用工作集仅 **~9.5 MB**（含 150% DPI 渲染双缓冲），隐藏进系统托盘约 1 分钟后稳定在 **~3.0 MB**。
 - **恪守安全底线**：**坚决不强刷脏页**（零 SSD 额外磨损与卡死）、**不杀进程**、**前台活跃与近期焦点窗口绝对免疫**。
 - **纯净离线**：零遥测埋点、零网络权限、零捆绑推广。
@@ -239,14 +248,14 @@ MemSweep 汲取了过去二十年经典内存工具（Mem Reduct、Process Lasso
 
 | 特性 / 指标 | MemSweep (内存速清) | Mem Reduct | WinMemoryCleaner | Process Lasso (SmartTrim) | ISLC |
 |:---|:---:|:---:|:---:|:---:|:---:|
-| **二进制体积** | **~401 KB**（单文件） | ~350 KB | ~10 MB+ (.NET) | ~80 MB+（完整套件） | ~1.5 MB |
+| **二进制体积** | **~403 KB**（单文件） | ~350 KB | ~10 MB+ (.NET) | ~80 MB+（完整套件） | ~1.5 MB |
 | **托盘常驻专用工作集** | **~3.0 MB** | ~4.5 MB | ~35 MB+ | ~45 MB+ | ~18 MB |
 | **前台活跃应用免疫** | ✅ **完全保护（窗口 + 父进程链 + 120秒历史）** | ❌ 无 | ❌ 无 | ⚠️ 仅排除名单 | ❌ 无 |
 | **真实枯竭触发机制** | ✅ **精准识别**（可用 < 512MB 或已用 ≥ 95%） | ❌ 仅看单百分比 | ❌ 缺陷逻辑（可用<82% 死循环） | ⚠️ 通用阈值 | ⚠️ 仅看待机列表 |
 | **固态硬盘防写保护** | ✅ **严禁刷写修改页**（防 SSD 写入风暴） | ❌ 强刷脏页 | ❌ 强刷脏页 | ✅ 安全 | ✅ 安全 |
 | **物理内存去重合并** | ✅ **内核级页面合并**（支持用户输入秒级中断） | ❌ 无 | ❌ 无 | ❌ 无 | ❌ 无 |
 | **UI 响应性** | ✅ **0 ms**（系统查询与操作 100% 异步线程） | ⚠️ Win32 同步阻塞 | ❌ 重载时整机卡死 | ✅ 良好 | ⚠️ WinForms 响应迟钝 |
-| **现代 Fluent 设计** | ✅ **无边框 + 原生圆角 + 平滑单层 Sheet** | ❌ 传统 Win98/XP 灰框 | ⚠️ 简易 WPF | ❌ 传统密集表格 | ❌ WinForms 简易界面 |
+| **现代 Fluent 设计** | ✅ **无边框 + 原生圆角 + 双微卡片基座** | ❌ 传统 Win98/XP 灰框 | ⚠️ 简易 WPF | ❌ 传统密集表格 | ❌ WinForms 简易界面 |
 | **多架构原生适配** | ✅ **原生 x64 + 原生 ARM64** | ⚠️ x64 / x86 | ⚠️ 仅 x64 | ✅ x64 / ARM64 | ⚠️ x86 / x64 |
 | **开源许可** | ✅ **MIT (feiyu-labs)** | GPLv3 | MIT | ❌ 商业闭源收费 | ❌ 免费闭源 |
 
@@ -269,12 +278,24 @@ MemSweep 汲取了过去二十年经典内存工具（Mem Reduct、Process Lasso
 | ❌ **修改系统高精度定时器分辨率（0.5ms/1ms）** | 伪玄学优化，破坏 Windows 电源管理，大幅削减笔记本续航。 |
 | ❌ **强制杀死或冻结进程** | 内存管理器的职责是协调物理页面，不是粗暴终结任务。 |
 
+<table align="center">
+  <tr>
+    <td align="center"><b>设置面板</b></td>
+    <td align="center"><b>进程管理与保护名单</b></td>
+  </tr>
+  <tr>
+    <td><img src="docs/screenshot-settings-zh.png" alt="设置面板" width="380"></td>
+    <td><img src="docs/screenshot-processes-zh.png" alt="进程管理与保护名单" width="380"></td>
+  </tr>
+</table>
+
 ### 3. 内核物理页面去重合并（深度清理）
 - 调用 Windows 原生内核机制（`SystemCombinePhysicalMemoryInformation`），扫描物理内存中的重复数据页并合并为写时复制（Copy-On-Write）页引用。
 - **离开时自动维护模式（可选）**：当检测到用户键盘与鼠标闲置超过 10 分钟且内存偏高时，后台自动执行页面合并；底层挂载输入监听器，**用户一旦有键盘或鼠标操作，内核 EventHandle 将在数毫秒内即时中止合并**，完全无感。
 
 ### 4. "One Screen" 现代极简设计
 - **520×600 紧凑视窗**：原生 DWM 无边框圆角、自绘投影与双缓冲抗锯齿，告别传统优化工具的陈旧灰框与臃肿大窗。
+- **底座双微卡片（Twin Foundation Cards）**：底部平铺进程与系统状态微卡片，动态透出 Top 1 内存占用大户（如 `yysls · 7.3 GB`）与系统健康摘要，兼顾极简视觉与高频信息获取，告别悬空留白。
 - **单层 Sheet 模态交互**：设置、进程保护名单、系统健康状态均以 200ms ease-out 缓动 Sheet 呼出，随用随关，主屏纯粹无杂质。
 - **环境光泽低功耗动效**：仪表盘弧光以 6.7 fps 平滑流转，主屏可见时单核占用不足 1.6%，托盘隐藏时定时器自动休眠（0% CPU）。
 - **即时主题与语言切换**：标题栏一键切换深色/浅色主题、中/EN 语言，毫秒级响应，无需重启应用。
@@ -282,6 +303,17 @@ MemSweep 汲取了过去二十年经典内存工具（Mem Reduct、Process Lasso
 ### 5. 系统级健康体检与自愈
 - 主屏底部「系统状态 ›」一键检查内存压缩（Memory Compression）、页面合并、SysMain 服务健康度、分页文件（Pagefile）配置与非分页内核池。
 - 自愈功能：若系统 SysMain 或内存压缩被第三方流氓脚本错误关闭，支持一键恢复至推荐状态。
+
+<table align="center">
+  <tr>
+    <td align="center"><b>系统状态体检</b></td>
+    <td align="center"><b>高级设置</b></td>
+  </tr>
+  <tr>
+    <td><img src="docs/screenshot-system-zh.png" alt="系统状态体检" width="380"></td>
+    <td><img src="docs/screenshot-advanced-zh.png" alt="高级设置" width="380"></td>
+  </tr>
+</table>
 
 ---
 

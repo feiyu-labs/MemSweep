@@ -257,6 +257,27 @@ static void InitThemeFromConfig() {
     ApplyTheme();
 }
 
+#include <winsvc.h>
+#include <shlobj.h>
+#include <imm.h>
+
+struct SysState {
+    bool loaded = false;
+    bool compression = false, pageCombining = false, prelaunch = false, mmOk = false;
+    bool sysmainRunning = false, fastStartupOn = false, wslEnabled = false;
+    std::wstring pagingFiles = L"";
+    std::wstring pfPath = L"";
+    int pfInitMB = 0, pfMaxMB = 0;
+    unsigned long long pfAllocMB = 0, pfUseMB = 0, pfPeakMB = 0;
+    // 来自 Metrics 的实时值
+    bool compOk = false;
+    unsigned long long compBytes = 0, nonpaged = 0, paged = 0;
+    double compRatio = 0, commitPct = 0;
+    unsigned long long commitUsed = 0, commitLimit = 0;
+};
+static SysState g_sys;
+static SRWLOCK g_sysLock = SRWLOCK_INIT;
+static volatile LONG g_sysLoading = 0;
 
 // 布局（96dpi 基准，绘制时按 dpi 缩放后的实际像素）
 struct Layout {
@@ -265,7 +286,7 @@ struct Layout {
 
     // 主屏
     RectF statusTitle, statusSub, gaugeCenter, usedLine, metaLine;
-    RectF btnClean, autoRow, lastClean, linkProcess, linkSystem;
+    RectF btnClean, autoRow, lastClean, cardProcess, cardSystem;
 
     // Sheet
     RectF sheet, sheetTitle, sheetClose, sheetBody;
@@ -323,16 +344,16 @@ static void BuildLayout(float w, float h, float dpi) {
     // 首页几何始终赋值：Sheet 打开时也要有有效矩形。
     // v1.9.3 只在无 Sheet 时赋值，DrawHome 仍会执行，未初始化的 RectF
     // 把首页元素画到随机位置——这就是“遮罩后元素偏移”的根因。
-    L.statusTitle = RectF(32, 72, L.w - 64, 28);
-    L.statusSub = RectF(32, 102, L.w - 64, 18);
-    L.gaugeCenter = RectF((L.w - 160) / 2, 132, 160, 160);
-    L.usedLine = RectF(32, 300, L.w - 64, 18);
-    L.metaLine = RectF(32, 322, L.w - 64, 18);
-    L.btnClean = RectF(32, 356, L.w - 64, 52);
-    L.autoRow = RectF(32, 432, L.w - 64, 42);
-    L.lastClean = RectF(32, 484, L.w - 64, 18);
-    L.linkProcess = RectF(32, 524, 220, 24);
-    L.linkSystem = RectF(L.w - 252, 524, 220, 24);
+    L.statusTitle = RectF(32, 68, L.w - 64, 28);
+    L.statusSub = RectF(32, 98, L.w - 64, 18);
+    L.gaugeCenter = RectF((L.w - 160) / 2, 126, 160, 160);
+    L.usedLine = RectF(32, 294, L.w - 64, 18);
+    L.metaLine = RectF(32, 316, L.w - 64, 18);
+    L.btnClean = RectF(32, 348, L.w - 64, 50);
+    L.autoRow = RectF(32, 412, L.w - 64, 40);
+    L.lastClean = RectF(32, 458, L.w - 64, 16);
+    L.cardProcess = RectF(32, 492, 218, 68);
+    L.cardSystem = RectF(L.w - 250, 492, 218, 68);
 
     if (g_sheet == Sheet::None) {
         AddHit(ID_BTN_SETTINGS, K_TITLEBTN, L.btnSettings);
@@ -344,8 +365,8 @@ static void BuildLayout(float w, float h, float dpi) {
         AddHit(ID_RING_CLEAN, K_BUTTON, RectF(L.gaugeCenter.X - 10, L.gaugeCenter.Y - 10,
                                              L.gaugeCenter.Width + 20, L.gaugeCenter.Height + 20));
         AddHit(ID_TG_AUTO, K_TOGGLE, L.autoRow);
-        AddHit(ID_HOME_PROCESS, K_BUTTON, L.linkProcess);
-        AddHit(ID_HOME_SYSTEM, K_BUTTON, L.linkSystem);
+        AddHit(ID_HOME_PROCESS, K_BUTTON, L.cardProcess);
+        AddHit(ID_HOME_SYSTEM, K_BUTTON, L.cardSystem);
         return;
     }
 
@@ -1009,6 +1030,27 @@ static unsigned long long ProcPrivateWS(const ProcInfo& p) {
     return p.wsPrivate ? p.wsPrivate : p.ws;
 }
 
+static void DrawHomeCard(Graphics& g, const RectF& r, int id,
+                         const wchar_t* titleZh, const wchar_t* titleEn,
+                         const std::wstring& subText, Color subColor) {
+    bool hover = g_hover == id;
+    bool press = g_pressed == id;
+    RectF box = r;
+    if (press) box.Y += 1.0f;
+    Color fill = hover
+        ? (g_dark ? C(255, 36, 40, 48) : C(255, 255, 255, 255))
+        : (g_dark ? C(255, 26, 28, 34) : C(255, 245, 246, 249));
+    Color border = hover ? (g_dark ? C(120, 52, 211, 153) : C(160, 16, 185, 129))
+                         : (g_dark ? C(40, 255, 255, 255) : C(20, 0, 0, 0));
+    FillRound(g, box, 12, fill);
+    StrokeRound(g, box, 12, border, 1.0f);
+
+    TextAt(g, Tx(titleZh, titleEn), RectF(box.X + 16, box.Y + 13, box.Width - 32, 20),
+           f12b, hover ? T.accent : T.text);
+    TextAt(g, subText, RectF(box.X + 16, box.Y + 37, box.Width - 32, 18),
+           f11, subColor);
+}
+
 static void DrawHome(Graphics& g) {
     const Metrics& m = g_drawSnap.m;
     bool cleaning = g_cleaning != 0;
@@ -1202,10 +1244,44 @@ static void DrawHome(Graphics& g) {
     }
     TextAt(g, last, L.lastClean, f11, T.text3);
 
-    TextAt(g, Tx(L"进程 ›", L"Processes ›"), L.linkProcess, f12,
-           g_hover == ID_HOME_PROCESS ? T.accent : T.text2);
-    TextAt(g, Tx(L"系统状态", L"System status") + std::wstring(L" ›"),
-           L.linkSystem, f12, g_hover == ID_HOME_SYSTEM ? T.accent : T.text2, StringAlignmentFar);
+    // 底部基座卡片：Top1 进程与系统状态微摘要
+    std::wstring topProcDesc;
+    for (const auto& p : g_drawSnap.procs) {
+        if (p.pid <= 4 || p.pid == GetCurrentProcessId() || p.name.empty()) continue;
+        std::wstring n = NormalizeProcName(p.name);
+        if (n.empty() || IsBuiltinProtectedName(n)) continue;
+        topProcDesc = n + L" · " + FormatBytes(ProcPrivateWS(p));
+        break;
+    }
+    if (topProcDesc.empty()) {
+        topProcDesc = Tx(L"查看所有应用", L"View all apps");
+    }
+    DrawHomeCard(g, L.cardProcess, ID_HOME_PROCESS,
+                 L"进程 ›", L"Processes ›",
+                 topProcDesc, T.text3);
+
+    std::wstring sysDesc;
+    Color sysColor = T.text3;
+    {
+        AcquireSRWLockShared(&g_sysLock);
+        bool mc = g_sys.compression;
+        bool pc = g_sys.pageCombining;
+        bool sm = g_sys.sysmainRunning;
+        bool mm = g_sys.mmOk;
+        ReleaseSRWLockShared(&g_sysLock);
+
+        if (!mm) {
+            sysDesc = Tx(L"点击查看状态", L"Click to inspect");
+        } else if (!mc || !sm || !pc) {
+            sysDesc = Tx(L"建议优化 1 项", L"1 recommendation");
+            sysColor = T.warn;
+        } else {
+            sysDesc = Tx(L"状态良好 · 压缩开启", L"All optimal · Compressed");
+        }
+    }
+    DrawHomeCard(g, L.cardSystem, ID_HOME_SYSTEM,
+                 L"系统状态 ›", L"System status ›",
+                 sysDesc, sysColor);
 }
 
 static void DrawSheetFrame(Graphics& g, const wchar_t* titleZh, const wchar_t* titleEn, bool back) {
@@ -2484,27 +2560,6 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 // ---------------------------------------------------------------------------
 // 系统检查窗口
 // ---------------------------------------------------------------------------
-#include <winsvc.h>
-#include <shlobj.h>
-#include <imm.h>
-
-struct SysState {
-    bool loaded = false;
-    bool compression = false, pageCombining = false, prelaunch = false, mmOk = false;
-    bool sysmainRunning = false, fastStartupOn = false, wslEnabled = false;
-    std::wstring pagingFiles = L"";
-    std::wstring pfPath = L"";
-    int pfInitMB = 0, pfMaxMB = 0;
-    unsigned long long pfAllocMB = 0, pfUseMB = 0, pfPeakMB = 0;
-    // 来自 Metrics 的实时值
-    bool compOk = false;
-    unsigned long long compBytes = 0, nonpaged = 0, paged = 0;
-    double compRatio = 0, commitPct = 0;
-    unsigned long long commitUsed = 0, commitLimit = 0;
-};
-static SysState g_sys;
-static SRWLOCK g_sysLock = SRWLOCK_INIT;
-static volatile LONG g_sysLoading = 0;
 
 static std::wstring ReadTextFileW(const std::wstring& path) {
     HANDLE h = CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr,
@@ -3138,6 +3193,7 @@ int RenderUISnapshot(const std::wstring& path) {
     g_snap = s;
     g_metrics = s.m;
     LeaveCriticalSection(&g_lock);
+    QuerySysInfo(true);
     g_reclaimableBytes.store(ComputeReclaimable(s, g_cfg, nullptr));
     g_drawDirty = true;
     g_snapshotMode = true;
@@ -3149,6 +3205,7 @@ int RenderUISnapshot(const std::wstring& path) {
             else if (_wcsicmp(env, L"advanced") == 0) g_sheet = Sheet::Advanced;
             else if (_wcsicmp(env, L"processes") == 0) g_sheet = Sheet::Processes;
             else if (_wcsicmp(env, L"about") == 0) g_sheet = Sheet::About;
+            else if (_wcsicmp(env, L"system") == 0) g_sheet = Sheet::System;
         }
     }
     g_sheetAnimating = false;
