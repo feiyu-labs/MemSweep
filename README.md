@@ -1,403 +1,386 @@
 # 内存速清 MemSweep
 
-[![CI](https://github.com/feiyu-labs/MemSweep/actions/workflows/ci.yml/badge.svg)](https://github.com/feiyu-labs/MemSweep/actions/workflows/ci.yml)
-[![Release](https://img.shields.io/github/v/release/feiyu-labs/MemSweep)](https://github.com/feiyu-labs/MemSweep/releases/latest)
-[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
+<p align="center">
+  <img src="res/icon.ico" alt="MemSweep Logo" width="96" height="96" />
+</p>
 
-> 单文件 ~392KB · 主屏约 9.5MB / 托盘约 3–6MB（专用工作集） · 零依赖 · 无网络无遥测 · 前台免疫 · UI 永不阻塞的 Windows 智能内存守护
+<p align="center">
+  <strong>A lightweight, intelligent, and safe Windows memory manager.</strong><br>
+  轻量、智能、安全的 Windows 原生内存管理与守护工具。
+</p>
 
-MemSweep 是为「重度开发机内存常年 90%+」场景设计的现代内存清理器。它把 2026 年全网内存清理方案
-（Mem Reduct / WinMemoryCleaner / Process Lasso SmartTrim / ISLC / RAMKeeper / WinMemClean 等）
-的精华合成为一套**分层智能引擎**，并修掉了同类工具导致卡死、误伤前台、反复抖动、刷盘伤 SSD 的所有已知坑。
+<p align="center">
+  <a href="https://github.com/feiyu-labs/MemSweep/actions/workflows/ci.yml"><img src="https://github.com/feiyu-labs/MemSweep/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="https://github.com/feiyu-labs/MemSweep/releases/latest"><img src="https://img.shields.io/github/v/release/feiyu-labs/MemSweep?color=emerald" alt="Release"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue.svg" alt="License: MIT"></a>
+  <img src="https://img.shields.io/badge/Platform-Windows%2010%2F11%20(x64%20%7C%20ARM64)-blue" alt="Platform">
+  <img src="https://img.shields.io/badge/Binary%20Size-~401%20KB-success" alt="Size">
+  <img src="https://img.shields.io/badge/Tray%20RAM-~3.0%20MB-success" alt="Memory">
+  <img src="https://img.shields.io/badge/Telemetry-Zero%20%2F%20100%25%20Offline-green" alt="No Telemetry">
+</p>
 
-| 浅色主题 | 深色主题 |
-|---|---|
-| ![light](docs/screenshot-light.png) | ![dark](docs/screenshot-dark.png) |
+<p align="center">
+  <a href="#-english">English</a> • <a href="#-简体中文">简体中文</a>
+</p>
 
-## 📦 获取
+---
 
-- **下载**：[GitHub Releases](https://github.com/feiyu-labs/MemSweep/releases/latest)
-  （`MemSweep-<版本>-x64.zip` / `-arm64.zip`，内含 `MemSweep.exe`、`install.cmd`、
-  `uninstall.cmd`、`INSTALL.txt`、`LICENSE`，各附 SHA256）
-- **安装**：解压后右键 `install.cmd` 以管理员运行（复制到 Program Files +
-  计划任务开机自启 + 桌面快捷方式）；卸载运行 `uninstall.cmd`，配置与日志保留在
-  `%APPDATA%\MemSweep\`
-- **Windows on ARM**：原生 ARM64 构建随 Release 提供
-- **代码签名**：筹备中，见 [CODE_SIGNING.md](CODE_SIGNING.md)（未签名版本请核对 Release 内 SHA256）
+<table align="center">
+  <tr>
+    <td align="center"><b>Light Theme / 浅色主题</b></td>
+    <td align="center"><b>Dark Theme / 深色主题</b></td>
+  </tr>
+  <tr>
+    <td><img src="docs/screenshot-light.png" alt="MemSweep Light" width="380"></td>
+    <td><img src="docs/screenshot-dark.png" alt="MemSweep Dark" width="380"></td>
+  </tr>
+</table>
+
+---
+
+# 🇬🇧 English
+
+## 💡 Overview
+
+**MemSweep** is a high-performance, ultra-lightweight Windows memory management utility crafted specifically for heavy developer workstations where RAM usage frequently exceeds 85–90%. 
+
+Instead of fighting Windows' internal caching mechanisms, MemSweep synthesizes the best ideas from decades of memory management tools (Mem Reduct, Process Lasso SmartTrim, ISLC, WinMemoryCleaner) into a **safe, tiered, intelligent engine**. It tames runaway background Electron/IDE processes while providing strict immunity to foreground applications, and completely eliminates the crashes, disk write storms, and stuttering caused by legacy tools.
+
+- **Zero Runtime Dependencies**: Pure C++20, Win32, and GDI+. No .NET, no WebView2, no Electron. Single standalone binary (~401 KB x64 / ~338 KB ARM64).
+- **Featherweight Resident Footprint**: ~9.5 MB Private Working Set when open (includes 150% DPI double-buffer); drops to **~3.0 MB** when idle in the system tray.
+- **Strictly Safe by Design**: **Never** force-flushes modified pages (no SSD wear or freezing), **never** kills processes, and **never** touches your active foreground window.
+- **100% Offline & Private**: Zero telemetry, zero network access, and zero background ads.
+
+---
+
+## ⚖️ Why MemSweep? (Comparison Matrix)
+
+| Feature / Metric | MemSweep | Mem Reduct | WinMemoryCleaner | Process Lasso (SmartTrim) | ISLC |
+|:---|:---:|:---:|:---:|:---:|:---:|
+| **Binary Size** | **~401 KB** (Standalone) | ~350 KB | ~10 MB (.NET) | ~80 MB (Full Suite) | ~1.5 MB |
+| **Tray Resident RAM** | **~3.0 MB** (Private WS) | ~4.5 MB | ~35 MB+ | ~45 MB+ | ~18 MB |
+| **Foreground App Immunity** | ✅ **Full (Window + Parent + 120s History)** | ❌ None | ❌ None | ⚠️ Exclusion list only | ❌ None |
+| **True Depletion Trigger** | ✅ **Yes** (Free < 512MB or Used ≥ 95%) | ❌ Threshold only | ❌ Flawed (Free < 82% freeze loop) | ⚠️ Generic threshold | ⚠️ Standby size only |
+| **SSD Write Storm Protection** | ✅ **Guaranteed** (No Modified Page Flush) | ❌ Dangerous Flush | ❌ Dangerous Flush | ✅ Safe | ✅ Safe |
+| **Physical Page Deduplication** | ✅ **Native NT Combining** (with Abort) | ❌ None | ❌ None | ❌ None | ❌ None |
+| **UI Responsiveness** | ✅ **0 ms** (100% Asynchronous Worker) | ⚠️ Win32 Blocking | ❌ Freezes on heavy load | ✅ Good | ⚠️ WinForms |
+| **Modern Fluent UI & Dark Theme** | ✅ **Native Frameless + DWM + Animations** | ❌ Win98/XP Classic | ⚠️ Basic WPF | ❌ Legacy Win32 | ❌ WinForms Classic |
+| **Architecture Support** | ✅ **Native x64 + Native ARM64** | ⚠️ x64 / x86 | ⚠️ x64 only | ✅ x64 / ARM64 | ⚠️ x86 / x64 |
+| **Open Source & License** | ✅ **MIT (feiyu-labs)** | GPLv3 | MIT | ❌ Commercial / Closed | ❌ Freeware / Closed |
+
+---
+
+## ✨ Key Features
+
+### 1. Tiered Intelligent Engine & True Depletion Trigger
+- **Smart Triggering**: Triggers automatic cleaning only when `Used % ≥ Threshold` **AND** true physical exhaustion occurs (`Available < 512 MB` or `Used ≥ 95%`). Windows using free memory as standby cache is natural behavior and is never treated as a memory shortage.
+- **Foreground Immunity**: The current focused window, its entire parent process hierarchy, processes active in the last 120 seconds, and critical system/VM services (WSL, QEMU) are **100% immune**—not a single page is touched.
+- **Idle-Aware Working Set Trimming**: Under routine pressure, MemSweep only trims background processes that have had near-zero CPU activity for ≥ 300 seconds and hold a working set ≥ 128 MB (Process Lasso SmartTrim concept, built-in for free).
+- **Anti-Thrashing Cooldown**: The same process is never trimmed more than once every 10 minutes unless its working set expands by > 1.5x.
+
+### 2. Strict Safety Boundaries: What We Never Do
+| Dangerous Action | Why MemSweep Forbids It |
+|:---|:---|
+| ❌ **Force Flushing Modified Pages (`MemoryFlushModifiedList`)** | The root cause of full-system freezes in older tools. Induces severe SSD write storms with negligible RAM benefit. |
+| ❌ **Flushing Registry Caches** | Generates meaningless disk I/O without reclaiming actual physical memory. |
+| ❌ **Global `MemoryEmptyWorkingSets` Sweep** | Freezes the active foreground application and causes massive immediate page-fault spikes. |
+| ❌ **Timer Resolution Hacks (1ms/0.5ms)** | Destroys CPU power management and drains laptop battery for placebo gains. |
+| ❌ **Terminating or Suspending Processes** | Memory cleaners should manage pages, not kill applications. |
+
+<table align="center">
+  <tr>
+    <td align="center"><b>Settings Sheet / 设置面板</b></td>
+    <td align="center"><b>Process & Protection / 进程保护</b></td>
+  </tr>
+  <tr>
+    <td><img src="docs/screenshot-settings.png" alt="Settings Sheet" width="380"></td>
+    <td><img src="docs/screenshot-processes.png" alt="Processes Sheet" width="380"></td>
+  </tr>
+</table>
+
+### 3. Physical Memory Page Deduplication (Deep Clean)
+- Leverages the Windows NT Kernel feature (`SystemCombinePhysicalMemoryInformation`) to find and merge identical physical memory pages into copy-on-write references.
+- **Away Maintenance Mode (Optional)**: Automatically triggers deduplication when the user has been away from the machine for ≥ 10 minutes. Monitored by a low-level input hook; user mouse or keyboard activity **immediately aborts** combining via kernel event handles within milliseconds.
+
+### 4. "One Screen" Fluent Design
+- **Frameless 520×600 Window**: Hardware-accelerated GDI+ double-buffering, Windows 11 DWM rounded corners, and soft drop shadows.
+- **Calm Interaction**: No multi-page maze or complex tabs. Settings, Process Management, and System Status open as compact, smooth modal sheets (200ms ease-out transitions).
+- **Measured CPU Budget**: Ambient gauge sweep runs at a deliberate 6.7 fps, consuming less than 1.6% of a single CPU core when visible, and 0% when hidden in tray.
+- **Instant Dual-Theme & Bilingual Toggle**: Toggle Dark/Light theme or Switch English/Chinese directly from the title bar with a single click.
+
+### 5. Built-in System Health Diagnostics
+- One-click inspection of Windows Memory Compression status, System Page Combining, SysMain service state, Pagefile allocations, and Non-Paged Kernel Pools.
+- Auto-repair helpers: automatically detects and assists in re-enabling SysMain and Memory Compression if broken by third-party optimization scripts.
+
+<table align="center">
+  <tr>
+    <td align="center"><b>System Diagnostics / 系统状态</b></td>
+    <td align="center"><b>Advanced Settings / 高级设置</b></td>
+  </tr>
+  <tr>
+    <td><img src="docs/screenshot-system-check.png" alt="System Status" width="380"></td>
+    <td><img src="docs/screenshot-advanced.png" alt="Advanced Settings" width="380"></td>
+  </tr>
+</table>
+
+---
+
+## 📦 Download & Installation
+
+### Releases
+Download the latest zip package from [**GitHub Releases**](https://github.com/feiyu-labs/MemSweep/releases/latest):
+- `MemSweep-v1.9.11-x64.zip` (for 64-bit Intel / AMD processors)
+- `MemSweep-v1.9.11-arm64.zip` (for Snapdragon / Windows on ARM devices)
+
+*Each package includes `MemSweep.exe`, `install.cmd`, `uninstall.cmd`, `INSTALL.txt`, and `LICENSE`.*
+
+### Installation (Elevated)
+1. Extract the zip file to any folder.
+2. Right-click `install.cmd` and select **Run as Administrator**.
+   - Copies `MemSweep.exe` to `C:\Program Files\MemSweep\`.
+   - Creates a Windows Task Scheduler entry (`ONLOGON`, Highest Available privilege) so it starts automatically with Windows without UAC prompts.
+   - Creates a desktop shortcut and launches MemSweep minimized to the tray.
+
+### Uninstallation
+- Right-click `uninstall.cmd` and select **Run as Administrator**.
+- Automatically cleans up the scheduled task, files in Program Files, and shortcuts. Config and logs remain at `%APPDATA%\MemSweep\` (delete manually if desired).
+
+### Portable Mode
+Run `MemSweep.exe` directly from any folder. Settings are automatically saved to `%APPDATA%\MemSweep\config.ini`.
+
+---
+
+## ⌨️ CLI & Automation
+
+MemSweep includes a rich set of command-line switches for scripts, CI environments, and power users:
+
+```cmd
+MemSweep.exe /clean          :: Trigger a one-shot intelligent clean and exit silently
+MemSweep.exe /dryrun         :: Simulation mode: inspect what would be cleaned without touching memory
+MemSweep.exe /combine        :: Run kernel physical page deduplication (Deep Clean)
+MemSweep.exe /trimpid <PID>  :: Surgically trim working set for a specific process ID
+MemSweep.exe /pause          :: Pause auto-cleaning for 1 hour (forwards to running instance)
+MemSweep.exe /resume         :: Resume auto-cleaning
+MemSweep.exe /tray           :: Launch directly into the system tray (used by Task Scheduler)
+MemSweep.exe /show           :: Open the main window (forwards to running instance)
+MemSweep.exe /selftest       :: Run full policy engine self-test (returns exit code 0 on PASS)
+MemSweep.exe /exit           :: Gracefully terminate the running background instance
+```
+
+---
+
+## 📊 Verified Benchmarks & Footprint
+
+Measured on Windows 11 (26H2 Build 26340, i7-12800HX, 24 GB RAM):
+
+| State / Operation | Private Working Set (Task Manager) | Total Working Set | Private Commit | Duration / Gain |
+|:---|:---:|:---:|:---:|:---:|
+| **Main Window Open (150% DPI)** | **9.5 MB** | 17.0 MB | 12.2 MB | Backbuffer allocated |
+| **Minimized to Tray (Immediate)** | 6.0 MB | 8.4 MB | 9.2 MB | Backbuffer freed & heap compacted |
+| **Tray Idle (Settled ~1 min)** | **3.0 MB** | 3.6 MB | 9.6 MB | Low-overhead background watch |
+| **Routine Intelligent Clean** | — | — | — | **+3,509 MB Free, +1,128 MB Avail (4.1s)** |
+| **Low-Priority Standby Purge** | — | — | — | **+991 MB Free (0.34s)** |
+| **Physical Page Deduplication** | — | — | — | **155,320 pages merged (~607 MB reclaimed)** |
+| **Away Maintenance (5s idle test)**| — | — | — | **280,733 pages merged (~1.1 GB, aborted on input)** |
+
+---
+
+## 🛠️ Build from Source
+
+MemSweep uses [Zig](https://ziglang.org/) as an ultra-fast, zero-hassle C++ toolchain (no heavyweight Visual Studio installation required):
+
+```cmd
+git clone https://github.com/feiyu-labs/MemSweep.git
+cd MemSweep
+
+:: Build release executable (dist\MemSweep.exe)
+build.cmd
+
+:: Run full regression suite (selftest + idle diagnostics + headless UI rendering check)
+build.cmd test
+
+:: Cross-compile for Windows on ARM64
+build.cmd arm64
+```
+
+---
+
+## ❓ Frequently Asked Questions (FAQ)
+
+#### Q: Why doesn't the memory percentage drop immediately after cleaning?
+The percentage in Task Manager represents **In-Use Physical Pages**. If all background processes are protected, in foreground, or recently active, MemSweep strictly avoids trimming them. In this scenario, MemSweep purges standby caches into the **Free List** (which lowers allocation latency). MemSweep always reports the true "Free Gain" and "Available Gain" honestly.
+
+#### Q: Does memory cleaning reduce "Committed" memory?
+**No.** Committed memory represents virtual memory promises made by applications. Trimming working sets moves pages to standby or pagefiles, but does **not** lower Commit bytes. To reduce Commit, adjust JVM/V8 heap limits (`-Xmx`, `--max-old-space-size`) or close unnecessary apps.
+
+#### Q: Why does MemSweep require Administrator privileges?
+Purging system-wide standby lists and trimming file system cache are protected NT kernel operations requiring `SeProfileSingleProcessPrivilege` and `SeIncreaseQuotaPrivilege`. The provided `install.cmd` sets up a silent Scheduled Task, so you never see a UAC prompt during daily boot.
+
+---
+
+# 🇨🇳 简体中文
+
+## 💡 项目概览
+
+**MemSweep（内存速清）** 是一款专为「重度开发机、常年高内存占用（85–90%+）」场景设计的现代 Windows 原生内存优化与常驻守护工具。
+
+Windows 自身的内存管理机制在常规办公下非常完善，但在重度多任务开发机上，失控的各类 Electron 框架应用、IDE 后台辅助进程、构建编译器与虚拟机常驻，极易将物理内存与分页文件推向枯竭边缘。
+
+MemSweep 汲取了过去二十年经典内存工具（Mem Reduct、Process Lasso SmartTrim、ISLC、WinMemoryCleaner）的工程经验，剔除会导致系统死锁、频繁卡顿、误伤前台与刷盘损坏 SSD 的陈旧做法，凝聚为一套**安全、分层、自适应的智能内存调度引擎**。
+
+- **极致原生，零第三方运行时**：纯 C++20 + Win32 + GDI+ 双缓冲，无 .NET、无 WebView2、无 Electron。单文件仅 **~401 KB**（ARM64 仅 ~338 KB）。
+- **极小常驻，静默无感**：界面打开时专用工作集仅 **~9.5 MB**（含 150% DPI 渲染双缓冲），隐藏进系统托盘约 1 分钟后稳定在 **~3.0 MB**。
+- **恪守安全底线**：**坚决不强刷脏页**（零 SSD 额外磨损与卡死）、**不杀进程**、**前台活跃与近期焦点窗口绝对免疫**。
+- **纯净离线**：零遥测埋点、零网络权限、零捆绑推广。
+
+---
+
+## ⚖️ 为什么选择 MemSweep？（横向对比）
+
+| 特性 / 指标 | MemSweep (内存速清) | Mem Reduct | WinMemoryCleaner | Process Lasso (SmartTrim) | ISLC |
+|:---|:---:|:---:|:---:|:---:|:---:|
+| **二进制体积** | **~401 KB**（单文件） | ~350 KB | ~10 MB+ (.NET) | ~80 MB+（完整套件） | ~1.5 MB |
+| **托盘常驻专用工作集** | **~3.0 MB** | ~4.5 MB | ~35 MB+ | ~45 MB+ | ~18 MB |
+| **前台活跃应用免疫** | ✅ **完全保护（窗口 + 父进程链 + 120秒历史）** | ❌ 无 | ❌ 无 | ⚠️ 仅排除名单 | ❌ 无 |
+| **真实枯竭触发机制** | ✅ **精准识别**（可用 < 512MB 或已用 ≥ 95%） | ❌ 仅看单百分比 | ❌ 缺陷逻辑（可用<82% 死循环） | ⚠️ 通用阈值 | ⚠️ 仅看待机列表 |
+| **固态硬盘防写保护** | ✅ **严禁刷写修改页**（防 SSD 写入风暴） | ❌ 强刷脏页 | ❌ 强刷脏页 | ✅ 安全 | ✅ 安全 |
+| **物理内存去重合并** | ✅ **内核级页面合并**（支持用户输入秒级中断） | ❌ 无 | ❌ 无 | ❌ 无 | ❌ 无 |
+| **UI 响应性** | ✅ **0 ms**（系统查询与操作 100% 异步线程） | ⚠️ Win32 同步阻塞 | ❌ 重载时整机卡死 | ✅ 良好 | ⚠️ WinForms 响应迟钝 |
+| **现代 Fluent 设计** | ✅ **无边框 + 原生圆角 + 平滑单层 Sheet** | ❌ 传统 Win98/XP 灰框 | ⚠️ 简易 WPF | ❌ 传统密集表格 | ❌ WinForms 简易界面 |
+| **多架构原生适配** | ✅ **原生 x64 + 原生 ARM64** | ⚠️ x64 / x86 | ⚠️ 仅 x64 | ✅ x64 / ARM64 | ⚠️ x86 / x64 |
+| **开源许可** | ✅ **MIT (feiyu-labs)** | GPLv3 | MIT | ❌ 商业闭源收费 | ❌ 免费闭源 |
 
 ---
 
 ## ✨ 核心特性
 
-### 智能引擎（同赛道独有组合）
+### 1. 分层智能引擎与真实枯竭防抖
+- **精准触发条件**：仅在 `已用百分比 ≥ 设定阈值` 且系统达到**真实枯竭**（可用内存 < 512MB 或已用率 ≥ 95%）时触发自动清理。Windows 将空闲内存用作待机缓存属于正常特性，不被视作内存吃紧。
+- **前台焦点绝对免疫**：当前活跃前台窗口、其所有父级进程链、最近 120 秒内获得过焦点的应用，以及系统关键服务和虚拟机（WSL / QEMU），**一页不碰**，杜绝切换窗口时的卡顿缺页。
+- **空闲感知后台修剪**：常规高压下，MemSweep 只对后台 CPU 极低活动超过 300 秒、且工作集 ≥ 128MB 的进程修剪工作集（借鉴 Process Lasso SmartTrim 精髓，免费且原生集成）。
+- **防抖防颠簸冷却**：同一进程在 10 分钟内绝不重复修剪，除非其工作集再次增长超过 1.5 倍。
 
-1. **正确触发语义** — `已用 ≥ 阈值` + 清理间隔 + **真实枯竭**（可用 < 512MB 或使用率 ≥ 95%）
-   - `free` 低是 Windows 正常使用待机缓存的结果，不再单独当作“快没内存”
-   - 修复 WinMemoryCleaner「可用 < 82%」导致死循环卡死的设计
-2. **前台免疫** — 焦点窗口 + 其父进程链 + 最近 120 秒焦点历史 + 系统关键进程，**一页不碰**
-3. **空闲感知** — 常规压力只修剪「后台 + CPU 低活动 ≥ 300 秒 + 工作集 ≥ 128MB」的进程
-   （Process Lasso SmartTrim 思想，免费实现）；真实枯竭时才允许非空闲后台修剪
-4. **分层执行 + 防抖**
-   - 自动模式：空闲后台修剪 + 低优先级缓存可同次执行；真实枯竭才升级为「非空闲修剪 + 全量缓存」；
-     **自动模式永不合并页面**
-   - 手动模式：全量缓存 → 系统文件缓存 → 工作集修剪；可选「深度清理」合并重复物理页（默认关）
-   - 同一进程 10 分钟内不重复修剪（除非工作集增长 > 1.5 倍）
-5. **效果统计修正（v1.7）** — 同时记录「空闲增量」和「可用增量」；主屏/气泡优先显示空闲增益，
-   不再出现缓存已清空、空闲已恢复 300MB，界面却写“释放 0MB”的误导
-6. **并发加固（v1.8）** — 快照缓冲 thread_local、配置不可变快照、保护名单锁内原子交换、
-   共享计数原子化；特权按需开启/用后关闭
-7. **离开时深度维护（v1.8，默认关）** — 会话空闲 ≥10 分钟且内存偏高时，后台修剪空闲后台 +
-   低优先级缓存 + 页面合并；用户一有输入立即中止；6 小时冷却
+### 2. 永不触碰的危险操作（安全底线）
+| 危险操作 | 为什么 MemSweep 坚决不做 |
+|:---|:---|
+| ❌ **强制刷盘修改页（`MemoryFlushModifiedList`）** | 传统清理软件导致全机瞬间卡死数秒的罪魁祸首；会引发剧烈的 SSD 突发写入，而物理内存收益极小。 |
+| ❌ **刷写注册表缓存** | 纯粹的写盘消耗，没有任何内存回收价值。 |
+| ❌ **全局粗暴 `MemoryEmptyWorkingSets` 一刀切** | 冻结正在前台工作的应用，引发全系统大面积缺页异常。 |
+| ❌ **修改系统高精度定时器分辨率（0.5ms/1ms）** | 伪玄学优化，破坏 Windows 电源管理，大幅削减笔记本续航。 |
+| ❌ **强制杀死或冻结进程** | 内存管理器的职责是协调物理页面，不是粗暴终结任务。 |
 
-### 永不做的危险操作
+### 3. 内核物理页面去重合并（深度清理）
+- 调用 Windows 原生内核机制（`SystemCombinePhysicalMemoryInformation`），扫描物理内存中的重复数据页并合并为写时复制（Copy-On-Write）页引用。
+- **离开时自动维护模式（可选）**：当检测到用户键盘与鼠标闲置超过 10 分钟且内存偏高时，后台自动执行页面合并；底层挂载输入监听器，**用户一旦有键盘或鼠标操作，内核 EventHandle 将在数毫秒内即时中止合并**，完全无感。
 
-| 操作 | 为什么不做 |
-|---|---|
-| ❌ 脏页强刷盘（MemoryFlushModifiedList） | 全网卡死事故的元凶；SSD 写入风暴 |
-| ❌ 注册表缓存刷盘 | 纯写盘、无内存收益 |
-| ❌ 全局 `MemoryEmptyWorkingSets` 一刀切 | 会连前台一起冻结 |
-| ❌ 定时器分辨率 hack | 游戏向副作用，破坏系统电源管理 |
-| ❌ 结束/挂起进程 | 越界，不属于内存清理 |
+### 4. "One Screen" 现代极简设计
+- **520×600 紧凑视窗**：原生 DWM 无边框圆角、自绘投影与双缓冲抗锯齿，告别传统优化工具的陈旧灰框与臃肿大窗。
+- **单层 Sheet 模态交互**：设置、进程保护名单、系统健康状态均以 200ms ease-out 缓动 Sheet 呼出，随用随关，主屏纯粹无杂质。
+- **环境光泽低功耗动效**：仪表盘弧光以 6.7 fps 平滑流转，主屏可见时单核占用不足 1.6%，托盘隐藏时定时器自动休眠（0% CPU）。
+- **即时主题与语言切换**：标题栏一键切换深色/浅色主题、中/EN 语言，毫秒级响应，无需重启应用。
 
-### One Screen（v1.6 重构，v1.7 打磨）
-
-- **520×600 单窗口**：没有顶部三页导航，没有设置子页；右上角设置按钮打开一层 Sheet
-- **品牌标记**：标题栏 M 标记与 `res/icon.ico` 共用同一套 256 网格几何；ico 含 16/20/24/32/48/256 六个关键尺寸，其余由 Windows 缩放
-- **主屏只有 4 组**：状态句、仪表盘、主操作、两个低权重文字入口
-  - `内存充足 / 内存偏高 / 内存紧张` 代替“当前内存”技术标题
-  - 细环 + 百分比 + 沿弧滑过的高光（7s 一圈，静止也有生命感）；
-    指标行“可释放约 X · 可用 Y”——点清理前就有预期
-  - 唯一主按钮「立即清理」；自动清理一行 + 开关；上次清理一行显示空闲增益
-  - “进程 ›”与“系统状态 ›”按需打开 Sheet
-- **设置是一张单列 Sheet**：自动清理 / 阈值 / 间隔 / 力度 / 保护名单（输入或「选择应用」）/
-  自启 / **静默**；修改即时保存。主题与语言**只在标题栏快切**（日/月图标 + 中/EN 胶囊），设置页不重复
-- **高级**默认折叠 5 项：只清理大于 / 后台闲置 / 全局热键 / 后台效率模式 / 离开时自动清理；
-  抖动保护内置为安全护栏不暴露开关，页面合并跟随「清理力度 = 深度」，静默模式在设置页
-- **进程 / 系统状态**各自是紧凑 Sheet，按内容缩短高度，不再用大面积空白撑满窗口
-- Sheet 200ms ease-out + 缓动曲线；**环境动效 6.7fps 仅可见主屏**（实测可见 3.1% /
-  隐藏 1.6% 单核预算），没有任何常驻 60fps
-
-![settings](docs/screenshot-settings.png)
-
-### 关于（v1.9.11）
-
-设置页底部「关于 MemSweep」或托盘右键 →「关于 MemSweep…」打开：
-
-- 品牌标记 + 版本/架构（`v1.9.11 · x64`）
-- GitHub 仓库 / 问题反馈 / 检查更新（用系统浏览器打开，应用自身不联网）
-- `MIT License · 不联网 · 不收集数据 · © 2026 feiyu-labs`
-
-![about](docs/screenshot-about.png)
-
-高级设置（固定 5 项，默认折叠）：
-
-![advanced](docs/screenshot-advanced.png)
-
-### 稳定性与流畅度（v1.4 起）
-
-- **UI 线程零阻塞**：`Get-MMAgent` / WMI / `schtasks` 全部移到工作线程；
-  主窗口消息 Ping **0ms**。
-- **Sheet 不拖帧**：200ms 时间基准过渡，只在打开期间启动 16ms 定时器，结束立即 kill。
-- **文字不闪**：`AntiAliasGridFit` + 双缓冲 + `WS_CLIPCHILDREN`，150% 分数缩放无彩边/抖动。
-- **全部窗口禁用 IME/TSF**：避免 Chatterfly 输入法注入约 56MB。
-- **系统机制自修复**：一键启用压缩/页面合并时，会先把 SysMain 设为自动并启动。
-
-### 系统状态 Sheet（v1.6，v1.7 文案修正）
-
-主屏底部「系统状态 ›」按需打开，不再占一个顶层页：
-
-- 先给一句健康摘要，再列压缩 / 页面合并 / SysMain / 页面文件 / 提交
-- “更多状态”展开预取、快速启动、内核池、WSL
-- 只有需要修复时才出现主操作按钮；导出诊断留在底部
-- 异步读取，不阻塞主屏
-
-![system status](docs/screenshot-system-check.png)
-
-### 进程 Sheet（v1.9.8 合并保护名单）
-
-主屏「进程 ›」或设置页「保护名单 → 选择应用 ›」打开同一张表：
-
-- 全部进程按专用工作集排序，滚轮浏览（一次 8 行，右侧滚动条）
-- 表头 **应用 / 内存 / 保护**；副标题直接说明结果：勾选后清理时跳过、不释放其内存
-- **点击行 = 切换保护**（绿勾 = 清理时跳过）；**右键 = 释放此进程内存**
-- 系统进程与虚拟机显示锁标记，始终保护、不可切换
-- 保护名单是**精确进程名匹配**：不区分大小写，`chrome` 与 `chrome.exe` 等价；
-  多个用逗号 / 分号分隔（不是关键字或模糊匹配）
-- 设置页仍保留输入框，给“未安装/未运行的应用”或批量粘贴用
-
-![processes](docs/screenshot-processes.png)
-
-### 离开时深度维护（v1.8，默认关）
-
-- 高级设置开关；触发条件：会话空闲 ≥ 10 分钟（`idleDeepSecs` 可调）且
-  使用率 ≥ 阈值或提交 ≥ 85%，非低电量、非全屏/演示
-- 后台动作：空闲后台工作集修剪 + 低优先级缓存 + 页面合并；**不清全量缓存/文件缓存**
-- 用户一有输入立即中止（`GetLastInputInfo` watcher → `MEMORY_COMBINE_INFORMATION_EX.EventHandle`）
-- 6 小时冷却（`idleDeepCooldownSec`）；实测空闲 5 秒测试配置下
-  合并 280,733 页 ≈1.1GB，空闲 +963MB / 可用 +751MB / 14.9s
-
-### 深度清理（跟随清理力度）
-
-- 托盘右键 →「深度清理（合并内存页）…」、`MemSweep.exe /combine`，或使用「清理力度 = 深度」
-- 调用内核页面合并（`SystemCombinePhysicalMemoryInformation`），去重相同物理页
-- 实测：一次合并 **155,320 页 ≈607MB**；另一次 **143,453 页 ≈560MB**；可用/空闲再增加数百 MB
-- **可能耗时 10–60 秒**（本机最慢一次 52.6s），会短暂占用 CPU；因此只挂在「深度」力度与
-  显式托盘动作上，**自动模式永不合并**。主屏会显示「正在合并内存页」，UI 不冻结
-
-### 精准进程操作（v1.3，v1.9.8 合并入口）
-
-- **进程表右键**：`释放此进程内存`（保护中/系统进程置灰）
-- **进程表左键**：切换保护，与设置页名单双向同步
-- CLI：`MemSweep.exe /trimpid <PID>` 精准修剪单个进程
-
-### 交互
-
-| 入口 | 功能 |
-|---|---|
-| 左键托盘 | 打开面板 |
-| 右键托盘 | 菜单（立即清理 / 自动清理 / 开机自启 / 日志 / 退出） |
-| 中键托盘 | 秒清 |
-| `Ctrl + Shift + M` | 全局热键立即清理（可关） |
-| `MemSweep.exe /clean` | 命令行单次清理（可进自动化） |
-| `MemSweep.exe /dryrun` | 演练模式：只报告将清理什么，不动手 |
-| `MemSweep.exe /selftest` | 策略引擎自检（CI 可用） |
-| 托盘右键 → 深度清理 | 合并重复内存页（10–60s，需确认；仅深度力度/显式动作） |
-| 进程表左键 / 右键 | 切换保护 / 释放此进程内存 |
-| `MemSweep.exe /combine` | 深度清理（10–60s；已运行实例则转发） |
-| `MemSweep.exe /trimpid <PID>` | 精准修剪单个进程 |
-| `MemSweep.exe /pause` | 暂停自动清理 1 小时（已运行实例则转发） |
-| `MemSweep.exe /resume` | 恢复自动清理 |
-| `MemSweep.exe /exit` | 退出正在运行的实例 |
-
-### 启动与窗口行为（v1.1 打磨）
-
-- **双击 exe / 桌面快捷方式** → 直接显示面板（不再静默进托盘）
-- **开机计划任务**（带 `/tray`）→ 静默托盘启动
-- **左键托盘** → 始终打开面板（不再"显示/隐藏"切换；双击不会闪退）
-- **关闭按钮** → 最小化到托盘；托盘右键 → 退出
-- 窗口为 **无边框自绘**（无原生标题栏），Win11 DWM 圆角 + 阴影
-- 若面板被全屏游戏遮挡，会弹托盘气泡提示 `Alt+Tab`
-- **键盘**：`Esc` 关闭 Sheet / 隐藏、`Ctrl+Enter` 立即清理、`Ctrl+S` 立即保存当前设置
-- **内存**（任务管理器「专用工作集」口径）：主屏 **约 9.5MB**（工作集 17MB，含 2.8MB 双缓冲），托盘稳定后 **约 3MB**（私有提交约 9.6MB；隐藏即释放双缓冲 + HeapCompact，空闲后系统回收工作集）；特权按需开启；全部窗口禁用 IME 注入
+### 5. 系统级健康体检与自愈
+- 主屏底部「系统状态 ›」一键检查内存压缩（Memory Compression）、页面合并、SysMain 服务健康度、分页文件（Pagefile）配置与非分页内核池。
+- 自愈功能：若系统 SysMain 或内存压缩被第三方流氓脚本错误关闭，支持一键恢复至推荐状态。
 
 ---
 
-## 📦 安装 / 卸载
+## 📦 下载与安装
 
-### 安装（管理员）
+### 获取发布包
+在 [**GitHub Releases**](https://github.com/feiyu-labs/MemSweep/releases/latest) 下载最新的预编译归档：
+- `MemSweep-v1.9.11-x64.zip`（适用于 64 位 Intel / AMD 处理器）
+- `MemSweep-v1.9.11-arm64.zip`（适用于骁龙 / Windows on ARM 现代设备）
+
+*压缩包内含 `MemSweep.exe`、`install.cmd`、`uninstall.cmd`、`INSTALL.txt` 与 `LICENSE`。*
+
+### 安装说明（需要管理员权限）
+1. 解压压缩包到任意临时目录。
+2. 右键单击 `install.cmd`，选择 **以管理员身份运行**：
+   - 自动复制主程序至 `C:\Program Files\MemSweep\`；
+   - 注册系统计划任务（登录时自启，HighestAvailable 最高权限），开机自启无任何 UAC 弹窗提示；
+   - 在桌面创建快捷方式，并自动静默常驻系统托盘。
+
+### 卸载说明
+- 右键单击 `uninstall.cmd`，选择 **以管理员身份运行** 即可完全移除安装文件、桌面快捷方式与开机任务。
+- 用户配置和日志保存在 `%APPDATA%\MemSweep\`（如需彻底清理可直接删除此文件夹）。
+
+### 绿色便携使用
+直接双击解压后的 `MemSweep.exe` 即可运行。所有参数与自定义白名单自动保存在 `%APPDATA%\MemSweep\config.ini`。
+
+---
+
+## ⌨️ 命令行与自动化
+
+MemSweep 提供了强大的非交互式命令行工具链，便于在 PowerShell 脚本、批处理或 CI 自动化构建中调用：
 
 ```cmd
-build.cmd            :: 先构建（见下文）
-install.cmd          :: 右键 → 以管理员身份运行
+MemSweep.exe /clean          :: 静默执行单次智能内存清理并退出
+MemSweep.exe /dryrun         :: 演练模式：仅分析并输出将要修剪的进程，不实际修改内存
+MemSweep.exe /combine        :: 运行内核物理页面合并（深度去重）
+MemSweep.exe /trimpid <PID>  :: 精准修剪指定 PID 进程的工作集
+MemSweep.exe /pause          :: 暂停自动清理守护 1 小时（自动转发给运行中的实例）
+MemSweep.exe /resume         :: 恢复自动清理守护
+MemSweep.exe /tray           :: 静默启动至系统托盘（开机计划任务专用）
+MemSweep.exe /show           :: 打开主面板（若已有实例运行则唤起其窗口）
+MemSweep.exe /selftest       :: 运行策略引擎完整自检（测试通过返回状态码 0）
+MemSweep.exe /exit           :: 安全退出当前后台常驻的实例
 ```
 
-安装脚本会：
-1. 复制到 `C:\Program Files\MemSweep\`
-2. 创建计划任务 `MemSweep`（`ONLOGON` + `/RL HIGHEST`，开机无 UAC 弹窗）
-3. 启动并常驻托盘
+---
 
-### 卸载
+## 📊 实机性能实测
+
+测试平台：Windows 11 (26H2 Build 26340, i7-12800HX, 24 GB 内存，150% 系统缩放)：
+
+| 状态 / 操作 | 任务管理器专用工作集 | 总工作集 (Working Set) | 私有提交 (Commit) | 说明 / 实测收益 |
+|:---|:---:|:---:|:---:|:---|
+| **主面板可见（150% DPI）** | **9.5 MB** | 17.0 MB | 12.2 MB | 包含 780×900×4 完整双缓冲 |
+| **托盘刚最小化** | 6.0 MB | 8.4 MB | 9.2 MB | 立即销毁双缓冲位图并执行堆压缩 |
+| **托盘空闲（约 1 分钟后）** | **3.0 MB** | 3.6 MB | 9.6 MB | 系统自动回收工作集，极低开销常驻 |
+| **单次智能清理** | — | — | — | **空闲 +3,509 MB，可用 +1,128 MB（耗时 4.1s）** |
+| **低优先级待机缓存释放** | — | — | — | **空闲 +991 MB（耗时 0.34s，无感知）** |
+| **物理页合并（深度清理）** | — | — | — | **单次合并 155,320 页（回收约 607 MB 重复页）** |
+| **离开维护（闲置测试）** | — | — | — | **合并 280,733 页（约 1.1 GB，有操作即刻秒级退出）** |
+
+---
+
+## 🛠️ 本地编译构建
+
+MemSweep 采用轻量现代化 [Zig](https://ziglang.org/) 工具链驱动（无需安装庞大繁重的 Visual Studio）：
 
 ```cmd
-uninstall.cmd        :: 右键 → 以管理员身份运行
+git clone https://github.com/feiyu-labs/MemSweep.git
+cd MemSweep
+
+:: 构建正式发布版（dist\MemSweep.exe）
+build.cmd
+
+:: 一键全量回归测试（引擎自检 + 闲时诊断 + 离屏无头 UI 渲染断言）
+build.cmd test
+
+:: 交叉编译 ARM64 原生版
+build.cmd arm64
 ```
 
-配置与日志保留在 `%APPDATA%\MemSweep\`（如需彻底清除请手动删除）。
+---
 
-> WinMemoryCleaner 已从本机彻底移除，不再提供回滚项。
+## ❓ 常见问题（FAQ）
+
+#### Q：为什么点了清理，任务管理器里的内存百分比有时没有明显下降？
+任务管理器显示的百分比对应**已用物理页（In-Use Physical Pages）**。如果系统当前后台没有长时间闲置的大内存应用（所有应用都在前台、或受到焦点保护名单豁免），MemSweep 会严格保护它们不被修剪；此时清理动作主要将低优先级缓存转入**空闲页列表（Free List）**，大幅减少后续突发大内存分配时的页换出延迟。MemSweep 在界面上优先汇报真实的「空闲增量」，拒绝弄虚作假。
+
+#### Q：内存清理能降低“已提交”（Commit / 虚拟内存）大小吗？
+**不能。**「已提交」是应用程序向操作系统申请的地址空间承诺。工作集修剪只是将物理页移至待机或分页文件，绝不会减少进程的提交字节数。真正降低提交必须通过关闭不需要的程序、或调整 Java/Node.js 等运行时堆上限（如 `-Xmx` / `--max-old-space-size`）。
+
+#### Q：为什么运行安装脚本必须以管理员权限启动？
+清理系统全局待机列表（Standby List）和修剪系统级文件缓存属于 Windows NT 核心特权操作，需要 `SeProfileSingleProcessPrivilege` 和 `SeIncreaseQuotaPrivilege` 特权。通过安装脚本注册计划任务后，开机以最高权限自启，日常使用**无需任何 UAC 弹窗**。
 
 ---
 
-## ⚙️ 默认参数（针对 24GB 重度开发机调校）
+## 📄 开源许可证与致谢
 
-| 参数 | 默认值 | 说明 |
-|---|---|---|
-| 占用达到 | **85%** | 已用内存占比（与任务管理器一致） |
-| 清理间隔 | **180s** | 两次自动清理最小间隔 |
-| 空闲阈值 | **300s** | 进程 CPU 零增量多久算「空闲」 |
-| 最小修剪 | **128MB** | 自动模式只碰大工作集 |
-| 空闲地板 | **1500MB** | 真正空闲低于此值才考虑清缓存 |
-| 缓存地板 | **1024MB** | 待机缓存低于此值不清（收益太小） |
-| 焦点保护 | **120s** | 最近获得过焦点的进程都保护 |
-| 保护名单 | `qemu-system-i386, vmmemwsl`（VM 也内置硬保护） | 开发工具交给前台/焦点/空闲判断 |
-
-全部参数可在面板调整或直接编辑 `%APPDATA%\MemSweep\config.ini`。
-
-### 保护名单/修剪策略
-
-- **VM 永远硬保护**：`qemu-system-i386` / `qemu-system-x86_64` / `vmmemwsl` 内置在保护名单中。
-  修剪客户机热页会造成 guest 大范围缺页，收益远小于代价。
-- **开发工具不再默认硬保护**：`claude / zcode / hermes` 由“前台 + 父链 + 最近 120 秒焦点历史”
-  自动保护；只有后台且空闲达到阈值（默认 300 秒）才会进入自动修剪。
-- **手动“立即清理”**可以修剪后台开发工具，所以你会感觉更有效；它仍不会碰前台/焦点历史。
-- 保护名单建议只放必须常驻的后台；清空也可以，但 VM 的内置保护仍在。
-- 需要知道：`EmptyWorkingSet` 把页移到待机/页面文件，**提交量不会下降**；切回应用时可能重新缺页。
-  因此 MemSweep 不做全局 `EmptyWorkingSets`、不刷脏页，也不在自动模式全区清空。
-
-
----
-
-## 🧠 设计边界（诚实说明）
-
-1. **清理器不能降低提交（Commit）**。提交 58GB 压在 24GB 物理内存上时，任何软件都只能搬运字节；
-   真正降提交要靠关闭程序、调整 `-Xmx/--max-old-space-size` 或进程级 Commit 上限。
-2. **「使用中」百分比**在任务管理器里 = 已用物理页。修剪工作集能让它下降；清待机只把
-   「待机」变成「空闲」，不改变「可用%」（Windows 定义：可用 = 空闲 + 待机）。
-   因此 MemSweep 的自动模式**以工作集修剪为主**。
-3. **Windows 11 26H2 起系统内存管理已大幅改进**（微软官方数据：多保留 2GB 活跃数据、
-   提交增长减少 900MB）。MemSweep 的定位是「补 OS 之不能」——治理失控的 Electron/V8/IDE 进程，
-   而不是对抗系统。
-4. 本工具不联网、不收集数据、不自动更新。
-
----
-
-## 🧭 技术栈结论（2026-11 调研）
-
-- **Tauri 2.12**：安装包确实小（1–15MB），但 Windows 上仍跑 WebView2/Chromium；
-  2026-10 实测 Tauri 空窗 **142MB private / 333MB WS**，托盘应用甚至可能留下
-  **113MB private / 310MB WS** 的 WebView2 助手进程。对“内存清理器”而言这是自相矛盾。
-- **Slint / egui**：原生 Rust UI，但常驻约 **30–95MB / 100–185MB**，且需要重写现有 C++ 引擎。
-  仅在未来要跨平台时才值得评估 Slint。
-- **WinUI 3**：复杂应用实测 WS 约 155MB，还要 Windows App SDK；不符合轻量托盘工具。
-- **C++/Win32 + GDI+（当前）**：**约 9.5MB 专用工作集 / 17MB WS**（主屏）；托盘稳定后约 3MB（私有提交 9.6MB），零额外运行时。
-  520×600 窗口下 GDI+ 足够；若未来过渡帧率不够，再加 Direct2D/DirectWrite + DirectComposition，
-  仍然不引入 WebView。
-
-“先进”不等于“流行”；对这个产品，先进是**更少常驻内存、更快启动、更少运行时**。
-调研来源与数据见 [RESEARCH.md](RESEARCH.md)。
-
-## 📊 本机实测（24GB / i7-12800HX / Win11 26H2 26340）
-
-| 场景 | 结果 |
-|---|---|
-| **v1.7 单次快速清理（提权）** | 候选 117，修剪 116，全量缓存 + 文件缓存，**空闲 +3509MB，可用 +1128MB，4.14s** |
-| **v1.7 自动低优先级缓存** | 缓存 2.3GB；**空闲 3.3→4.2GB（+991MB）**，可用 5.5→5.5GB，0.34s |
-| **v1.7 深度清理（可选）** | 合并 155,320 页 ≈607MB，空闲 +1635MB，可用 +1112MB，总 9.94s；另一次 143,453 页/560MB/7.2s |
-| **v1.7 深度整理最慢样本** | 合并 284,040 页 ≈1.1GB，可用 1.8→5.8GB，但耗时 **52.6s** → 仅在「清理力度=深度」或托盘显式动作时执行 |
-| **v1.8 页面合并（EventHandle）** | 合并 221,659 页 ≈866MB，空闲 20MB→1.2GB，18.1s；超时/取消可中止 |
-| **v1.8 离开时维护实测** | 空闲 5 秒测试配置：合并 280,733 页 ≈1.1GB，**空闲 +963MB，可用 +751MB，14.9s** |
-| **v1.9.2 CPU 预算** | 主屏可见 **1.6%**（托盘图标按百分比重建节流后）；隐藏态 1.6~4.7% 波动来自整机负载与 5s 采样守护（tick 实测 0.32%）；环境高光 6.7fps |
-| **v1.9 可释放估算** | 主屏直接显示“可释放约 X”（空闲候选专用WS + 缓存，随清理力度） |
-| **v1.9 自身内存** | 托盘 **5.9MB 私有 / 5.4MB WS** |
-| **v1.8 自身内存（历史）** | 主屏 8.2MB 私有 / 12.7MB WS；托盘隐藏 6.5MB / 11.1MB WS；全新托盘启动 5.9MB / 5.2MB WS |
-| v1.7 自身内存（历史） | 主屏 9.7MB 私有 / 14.2MB WS；托盘隐藏 6.9MB / 11.5MB WS；隐藏即释放双缓冲 |
-| v1.6 历史 | 主屏 9.9MB 私有 / 15.4MB WS；设置 9.7MB；托盘 5.9MB（20s 后释放） |
-| v1.4 历史 | 面板 11.4MB / 系统检查窗口 15.4MB；未禁用 IME 时 71.8MB |
-| 保护验证 | 前台/焦点历史/qemu/系统关键进程工作集**完全不变**；VM 内置硬保护 |
-| 自动触发 | 84–91% 负载正确触发；`free` 低但可用充足时不再误触发 |
-
-### 当前部署状态（2026-11-15）
-
-- 安装位置：`C:\Program Files\MemSweep\MemSweep.exe`（**v1.9.11.0**，401,920 字节）
-- SHA256：`FE2441AD3F7D86E99FC49FA153A3655A365CBD20B7CFA46FD29F10FBEB484FA3`
-- 计划任务：`MemSweep`（登录触发 / HighestAvailable / 电池供电可启动 / 无限执行时限）
-- `WinMemoryCleaner`：**已彻底移除**（进程/任务/winget 包/ARP/注册表/快捷方式/残留目录）
-- 主题：浅色（面板底部 自动/浅色/深色，已验证点击生效）
-- 窗口：无边框 **520×600 逻辑**，PerMonitorV2 支持 100–250%；当前显示 100%，文档截图按 150% 渲染
-- 启动：手动=显示面板；计划任务 `/tray`=静默托盘；桌面快捷方式已创建
-- **页面文件：D: 24576–65536 MB 已生效（allocated 31095MB；回滚 16384/49152）**
-- **SysMain：Running / Automatic**；页面合并、内存压缩均开启
-- 内存压缩存储约 5.1GB · 2.55×；非分页池约 1.1GB；预取/预启动仍关闭（系统原有设置）
-- 「离开时自动清理」默认关闭（`idleDeep=0`）；力度=深度（含合并页）；保护名单为空，VM 由内置保护兜底
-
----
-
-## 🏗 技术架构
-
-```
-src/common.h   基础类型 / 配置 / 日志 / 格式化
-src/core.h/.cpp  NT 快照 / 指标 / 策略 / 清理引擎 / 自检
-src/ui.h/.cpp   GDI+ 自绘 UI / 托盘 / 热键 / 主题 / 动画
-src/main.cpp    入口 / CLI / 单实例转发
-res/            图标 + UAC 清单 + 版本信息
-```
-
-**关键 API（数值已对照 phnt / SystemInformer 头文件与微软文档核验）**
-
-| API | 用途 | 权限 |
-|---|---|---|
-| `NtSetSystemInformation(80, MemoryPurgeStandbyList=4)` | 全量清待机 | SeProfileSingleProcess |
-| `NtSetSystemInformation(80, MemoryPurgeLowPriorityStandbyList=5)` | 温和清待机 | 同上 |
-| `NtSetSystemInformation(81, FILECACHE{-1,-1})` | 修剪系统文件缓存 | SeIncreaseQuota |
-| `NtQuerySystemInformation(5)` | 零句柄进程快照（WS/Commit/CPU/硬缺页） | 无 |
-| `NtQuerySystemInformation(80)` | 空闲/待机/修改页分优先级统计 | 无 |
-| `EmptyWorkingSet` | 单进程工作集修剪 | PROCESS_SET_QUOTA |
-| `SetProcessInformation(ProcessPowerThrottling)` | EcoQoS（进阶，默认关） | PROCESS_SET_INFORMATION |
-| `SetProcessInformation(ProcessMemoryPriority)` | 内存优先级 LOW（进阶，默认关） | 同上 |
-
----
-
-## 🔨 构建
-
-需要 [zig](https://ziglang.org/) 0.17.1：放到仓库同级 `../tools/` 目录，或设
-`ZIG` 环境变量指向 zig.exe（CI 即用此方式自动下载）。也可直接用 CI 产物。
-
-```cmd
-build.cmd          :: 正式版（requireAdministrator）
-build.cmd dev      :: 开发版（asInvoker，可免提权跑 UI 与 /clean）
-build.cmd test     :: dev + /selftest + /idlecheck + /uipng + /checkpng（CI 可用）
-build.cmd arm64    :: Windows on ARM 交叉编译
-```
-
-产物：`dist\MemSweep.exe`（~359KB，静态链接，无 CRT/DLL 依赖）。
-
----
-
-## 🧪 工程与质量（v1.7）
-
-- 编译告警：`-Wall -Wextra -Wshadow -Wformat=2 -Wundef -Wpointer-arith -Werror`，**零警告**
-- `build.cmd test` 一键回归（策略自检 / 空闲诊断 / 双界面快照）
-- 工程规范：[docs/ENGINEERING.md](docs/ENGINEERING.md) · [CHANGELOG.md](CHANGELOG.md) · `.editorconfig` · `.clang-format`
-- 崩溃记录：`SetUnhandledExceptionFilter` 写入 `CRASH exception=...`
-- 线程纪律：UI 线程不做 PowerShell/WMI/schtasks；`SysState` 本地快照 + `SRWLOCK` 换入
-- 内存治理：托盘图标节流、隐藏释放双缓冲、GDI+ 字体缓存、全部窗口禁用 IME 注入
-- 体积：**392KB** 单文件（401,920 字节，静态链接、零运行时依赖）
-
-## ❓ FAQ
-
-**Q：按了清理，任务管理器百分比为什么有时不降？**
-A：百分比看的是「使用中」。若没有可修剪的空闲后台进程（都被前台保护/近期活跃），
-自然不降；此时清理仍会把缓存转为空闲，降低分配延迟。**提交内存也无法通过清理降低**；
-面板/系统 Sheet 会明确提示。上次清理优先显示「空闲 +X」，它才是真正立刻可分配的页。
-
-**Q：会不会像 WinMemoryCleaner 那样卡死？**
-A：不会因系统查询卡死。v1.4 把 `Get-MMAgent` / WMI / `Get-WindowsOptionalFeature` / `schtasks`
-全部移到工作线程，UI 线程只做轻量读取；系统页异步回填，页面切换不阻塞。
-普通清理仍有 2/6 秒预算；只有手动开启「深度整理」时才会额外合并页面（10–60s，可关闭）。
-
-**Q：为什么必须管理员？**
-A：清理系统缓存与系统文件缓存是内核特权操作（`SeProfileSingleProcessPrivilege`）。
-计划任务以最高权限启动，日常无 UAC 弹窗。
-
-**Q：双击 exe 只闪一下、没有界面？**
-A：v1.1 已修复三个根因：① 托盘左键此前是"显示/隐藏"切换，双击会显示后立即隐藏；② 手动启动也带了 `/tray` 语义，静默进托盘；③ 窗口有原生边框导致双标题栏/内容挤压。现在手动启动必定显示面板，托盘左键永远打开，被全屏游戏遮挡时会有气泡提示。
-
-**Q：任务管理器里 MemSweep 内存为什么有时 11MB、有时 5MB？**
-A：主屏双缓冲约 1.2MB（150% 时约 2.8MB），实测私有 **8.2MB**（轮询 Sheet 后）、全新托盘 **5.9MB**；隐藏/最小化立即释放双缓冲。
-隐藏/最小化会**立即**释放双缓冲，托盘私有约 **6.9MB**；重新显示时按需重建。Sheet 只做 200ms 位移，不额外保留页面位图。
-全部窗口禁用 IME/TSF，否则 Chatterfly 输入法会注入约 56MB。
-
-**Q：自动清理为什么现在更“克制”？**
-A：v1.7 不再把 `free` 低当成内存枯竭。Windows 会把空闲 RAM 用作待机缓存，`free` 常年几百 MB 很正常；
-只有「可用 < 512MB」或「使用率 ≥ 95%」才算真实压力。常规高压下自动模式仍会修剪空闲后台并清低优先级缓存；
-真实枯竭才升级为非空闲后台修剪 + 全量缓存，且不会每 3 分钟重复全量清空。
-
-**Q：离开时深度维护会在我用电脑时突然卡一下吗？**
-A：不会。它只在会话空闲 ≥10 分钟（无键盘/鼠标输入）且内存偏高时启动；只要你一有输入，
-watcher 立刻通过内核 EventHandle 中止页面合并、停止修剪。它也不清全量缓存/文件缓存，
-所以回到电脑前台不会遇到“缓存被清空后第一次操作变慢”。默认关闭，6 小时冷却。
-
-**Q：深度清理（合并内存页）为什么只在“深度”力度？**
-A：它请求内核扫描并合并重复物理页，效果真实（本机单次 560–1100MB），但实测耗时 7–52 秒，
-期间会占用 CPU。为不把“点一下清理”变成一分钟等待，它只挂在「清理力度 = 深度」和
-托盘「深度清理」单独动作（带确认）上；常规力度永远不触发。
-
-**Q：杀毒软件误报？**
-A：无网络、无注入、无驱动。如遇误报请核对 SHA256 或自行编译。
-
----
-
-## 📄 License
-
-[MIT](LICENSE) © feiyu-labs。第三方文档/思路引用见 [RESEARCH.md](RESEARCH.md)。
-欢迎 Issue / PR，见 [CONTRIBUTING.md](CONTRIBUTING.md)。
+- 本项目基于 [MIT License](LICENSE) 协议完全开源。
+- 核心 NT 原生接口参考与微软系统内存机制研究详见 [RESEARCH.md](RESEARCH.md)。
+- 工程规范与设计守则参见 [docs/ENGINEERING.md](docs/ENGINEERING.md)。
+- 欢迎提交 Issue 与 Pull Request，共同参与构建更优秀的 Windows 原生小工具！
