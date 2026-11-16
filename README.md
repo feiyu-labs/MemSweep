@@ -27,7 +27,9 @@
   <a href="#features">Features</a> ·
   <a href="#command-line">Command line</a> ·
   <a href="#footprint">Footprint</a> ·
+  <a href="#features">Features</a> ·
   <a href="#build-from-source">Build</a> ·
+  <a href="#roadmap">Roadmap</a> ·
   <a href="CHANGELOG.md">Changelog</a>
 </p>
 
@@ -45,6 +47,8 @@
 ## What it is
 
 MemSweep reclaims memory that idle background processes are holding, so what you're using keeps running normally. It's one executable: no drivers, no services, no network, and no system changes you didn't ask for.
+
+It exists because of how this tool category usually fails: cleaners that flush modified pages and freeze the whole machine (Mem Reduct issues, WinMemoryCleaner "Optimize freezes 3 out of 5 times"), utilities that clean on a fixed timer and take the shell down with them (CleanMem), and RAM "boosters" that lower a graph while making the next load slower. MemSweep takes the opposite bet: decide on real pressure, touch only idle background memory, and report what actually happened.
 
 | | |
 |:---|:---|
@@ -83,7 +87,7 @@ MemSweep reclaims memory that idle background processes are holding, so what you
 
 ## Install
 
-Download `MemSweep-v1.9.16-x64.zip` or `MemSweep-v1.9.16-arm64.zip` from [Releases](https://github.com/feiyu-labs/MemSweep/releases/latest), extract it, then right-click `install.cmd` and choose **Run as administrator**.
+Download `MemSweep-v1.9.17-x64.zip` or `MemSweep-v1.9.17-arm64.zip` from [Releases](https://github.com/feiyu-labs/MemSweep/releases/latest), extract it, then right-click `install.cmd` and choose **Run as administrator**.
 
 The script copies `MemSweep.exe` to `C:\Program Files\MemSweep\`, registers a logon task with elevated privileges so startup never prompts, adds a desktop shortcut and starts MemSweep in the tray.
 
@@ -122,15 +126,16 @@ A manual clean on this machine has reclaimed 1–3 GB of free pages; the amount 
 
 | | MemSweep | Mem Reduct | WinMemoryCleaner | Process Lasso (SmartTrim) | ISLC |
 |:---|:---:|:---:|:---:|:---:|:---:|
-| Binary size | 403 KB | ~350 KB | ~10 MB (.NET) | ~80 MB (suite) | ~1.5 MB |
-| Tray memory | 3.0 MB | ~4.5 MB | ~35 MB | ~45 MB | ~18 MB |
+| Binary size | 403 KB | ~373 KB (installer) | ~471 KB + .NET | ~3.6 MB installer, ~80 MB suite | ~1.5 MB |
+| Tray memory | 3.0 MB | not published | not published | not published | ~27 MB (measured by MakeUseOf) |
 | Foreground immunity | Window, parent chain, 120 s focus history | No | No | Exclusion list | No |
-| Pressure-based trigger | Yes | No | No | Partial | Partial |
-| Modified-page flush | Never | Yes | Yes | No | No |
+| Trigger checks real pressure | Yes | No | No | Partial | Partial |
+| Modified-page flush | Never | Optional | Yes | No | No |
 | Page combining | Yes, abortable | No | No | No | No |
-| ARM64 build | Yes | No | No | Yes | No |
+| Native ARM64 | Yes | Yes | No | Yes | No |
+| Automatic mode omits freeze-prone lists | Yes | Optional | No | Optional | No |
 
-Rows describe published defaults and documented behaviour as of November 2026. Competitors change; check their documentation before relying on a row.
+Latest versions as of November 2026: Mem Reduct 3.5.2, WinMemoryCleaner 3.0.8, Process Lasso 19.0, ISLC 1.0.4.8. Rows describe published defaults and documented behaviour; competitors change, so check their documentation before relying on a row. User-reported freezes in this category (Mem Reduct issues #17/#90, WinMemoryCleaner issue #192, ISLC forum threads) are what the trigger and notification design in MemSweep work around.
 
 ## Build from source
 
@@ -165,6 +170,17 @@ No network code: no telemetry, no update checks, no data leaves the machine. The
 ## Community
 
 Bug reports and pull requests are welcome — see [CONTRIBUTING.md](CONTRIBUTING.md); report security issues privately as described in [SECURITY.md](SECURITY.md). Design decisions are in [docs/ENGINEERING.md](docs/ENGINEERING.md), and the research behind the thresholds in [RESEARCH.md](RESEARCH.md).
+
+## Roadmap
+
+In order, driven by what users of this category keep asking for:
+
+1. **Clean history** — every pass logged with its trigger, what it touched and what it freed, exportable, so results are checkable instead of taken on faith.
+2. **winget package and code signing** — install and update from the package manager without hash-checking by hand.
+3. **Per-area cleaning opt-in** — standby, file cache and page combining as explicit switches with a dry-run preview of what each would reclaim.
+4. **Impact diagnostics** — page-fault and reload-latency counters before and after a pass, so "did this help" has a measurement.
+
+Things that will not be added: process termination, RAM "defragmentation", timer-resolution changes, anything that runs network code.
 
 ## License
 

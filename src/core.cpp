@@ -21,7 +21,7 @@ volatile LONG g_cleanPhase = 0;
 volatile LONG g_quit = 0;
 HANDLE g_monEvent = nullptr;
 static HANDLE g_lowMemEvent = nullptr;
-ULONGLONG g_lastAutoCleanMs = 0;
+std::atomic<ULONGLONG> g_lastAutoCleanMs{0};
 std::atomic<ULONGLONG> g_lastFreeGain{0};
 std::atomic<ULONGLONG> g_lastAvailGain{0};
 std::atomic<ULONGLONG> g_lastCleanTickMs{0};
@@ -200,9 +200,14 @@ static bool WriteTextUtf8(const std::wstring& path, const std::wstring& data) {
     HANDLE h = CreateFileW(tmp.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
     if (h == INVALID_HANDLE_VALUE) return false;
     DWORD wr = 0;
-    WriteFile(h, "\xEF\xBB\xBF", 3, &wr, nullptr);
-    WriteFile(h, raw.data(), (DWORD)raw.size(), &wr, nullptr);
+    BOOL w1 = WriteFile(h, "\xEF\xBB\xBF", 3, &wr, nullptr);
+    BOOL w2 = WriteFile(h, raw.data(), (DWORD)raw.size(), &wr, nullptr);
     CloseHandle(h);
+    if (!w1 || !w2 || wr != (DWORD)raw.size()) {
+        // 写入失败（磁盘满/杀软锁定）时保留旧配置，绝不拿半截文件替换
+        DeleteFileW(tmp.c_str());
+        return false;
+    }
     return MoveFileExW(tmp.c_str(), path.c_str(), MOVEFILE_REPLACE_EXISTING) != 0;
 }
 
@@ -301,7 +306,8 @@ void SaveConfig() {
     s += std::wstring(L"hotkey=") + (c.hotkey ? L"1" : L"0") + L"\n";
     s += L"hotkeyCombo=" + c.hotkeyCombo + L"\n";
     s += std::wstring(L"ecoQoS=") + (c.ecoQoS ? L"1" : L"0") + L"\n";
-    WriteTextUtf8(ConfigPath(), s);
+    if (!WriteTextUtf8(ConfigPath(), s))
+        Log(L"配置写入失败（磁盘满或被占用），本次修改未保存");
 }
 
 void Log(const wchar_t* fmt, ...) {
@@ -1138,6 +1144,7 @@ static DWORD WINAPI IdleDeepThread(LPVOID) {
         g_lastFreeGain.store(r.freeGain);
         g_lastAvailGain.store(r.availGain);
         g_lastCleanTickMs.store(GetTickCount64());
+        g_lastCleanWasAuto.store(true, std::memory_order_relaxed);
     }
     LogCleanResult(L"离开时维护", (size_t)r.candidates, r);
     if (g_hwnd) {
@@ -1223,7 +1230,7 @@ void MonitorTick() {
         candidates = CountTrimCandidates(s, true, cfg.minWSAutoMB, cfg);
 
     if (!g_cleaning && !game && !AutoPaused() &&
-        ShouldTriggerAuto(cfg, s.m, now, g_lastAutoCleanMs)) {
+        ShouldTriggerAuto(cfg, s.m, now, g_lastAutoCleanMs.load(std::memory_order_relaxed))) {
         CleanPlan plan = PlanAuto(cfg, s.m, candidates > 0);
         if (plan.trimWS || plan.purgeLow || plan.purgeFull) {
             Log(L"自动清理触发：使用中 %d%%（阈值 %d%%），可用 %s，空闲 %s，缓存 %s，"
@@ -1471,6 +1478,16 @@ bool SelfTest() {
     m.availPhys = 200ULL * MB;
     CleanPlan p6 = PlanAuto(c, m, false);
     chk(p6.purgeFull, L"emergency purge despite hf spike");
+    // 边界值：硬缺页正好 4000/s 时低优先级缓存被拦（< 4000 才放行）
+    g_hfPerSec.store(4000.0);
+    m.loadPct = 85; m.availPhys = 3ULL * GB;
+    m.freeBytes = 100 * MB; m.standbyBytes = 2ULL * GB;
+    CleanPlan p7 = PlanAuto(c, m, false);
+    chk(!p7.purgeLow && !p7.purgeFull, L"hf 4000/s blocks purge at boundary");
+    g_hfPerSec.store(3999.0);
+    CleanPlan p8 = PlanAuto(c, m, false);
+    chk(p8.purgeLow && !p8.purgeFull, L"hf 3999/s allows low-priority purge");
+    g_hfPerSec.store(0.0);
     g_hfPerSec.store(0.0);
 
     // 结果统计只取正向增量
@@ -1518,6 +1535,9 @@ bool SelfTest() {
         chk(!ShouldNotifyAutoClean(128ULL * MB, 60 * 1000, false, false), L"auto notify respects gap");
         chk(!ShouldNotifyAutoClean(128ULL * MB, gap, true, false), L"auto notify quiet when panel visible");
         chk(!ShouldNotifyAutoClean(128ULL * MB, gap, false, true), L"auto notify quiet in silent mode");
+        // 边界值：正好 64MB 要通知（>=），差一字节不通知（<）
+        chk(ShouldNotifyAutoClean(64ULL * MB, gap, false, false), L"auto notify at exact 64MB");
+        chk(!ShouldNotifyAutoClean(64ULL * MB - 1, gap, false, false), L"auto notify below 64MB");
         chk(NotificationStateAllows(QUNS_ACCEPTS_NOTIFICATIONS), L"notify allowed when user accepts");
         chk(!NotificationStateAllows(QUNS_RUNNING_D3D_FULL_SCREEN) &&
             !NotificationStateAllows(QUNS_BUSY) &&

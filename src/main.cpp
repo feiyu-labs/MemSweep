@@ -146,7 +146,12 @@ int APIENTRY wWinMain(HINSTANCE hInst, HINSTANCE, PWSTR, int) {
             return 0;
         }
         HANDLE mtx = CreateMutexW(nullptr, TRUE, L"Local\\MemSweep.Instance");
-        (void)mtx;
+        bool heldByOther = (!mtx || GetLastError() == ERROR_ALREADY_EXISTS);
+        if (mtx) CloseHandle(mtx);
+        if (heldByOther) {
+            UI_ForwardClean();
+            return 0;
+        }
         EnsureConsole();
         if (!IsElevated()) {
 #ifdef MS_DEV
@@ -187,7 +192,13 @@ int APIENTRY wWinMain(HINSTANCE hInst, HINSTANCE, PWSTR, int) {
         return 0;
     }
     HANDLE mtx = CreateMutexW(nullptr, TRUE, L"Local\\MemSweep.Instance");
-    (void)mtx;
+    if (!mtx || GetLastError() == ERROR_ALREADY_EXISTS) {
+        // 以创建结果为准，消除“先查后建”的窗口：两个实例同时启动只有一个能进来
+        if (mtx) CloseHandle(mtx);
+        if (wantExit) UI_ForwardExit();
+        else UI_ForwardShow();
+        return 0;
+    }
     (void)wantShow;
 
     if (!IsElevated()) {

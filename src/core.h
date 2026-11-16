@@ -49,7 +49,7 @@ extern volatile LONG g_cleaning;
 extern volatile LONG g_cleanPhase; // 0 空闲 / 1 修剪 / 2 合并页
 extern volatile LONG g_quit;
 extern HANDLE g_monEvent;
-extern ULONGLONG g_lastAutoCleanMs;
+extern std::atomic<ULONGLONG> g_lastAutoCleanMs;
 extern std::atomic<ULONGLONG> g_lastFreeGain;   // 真正空闲页的净增量（用户可感知）
 extern std::atomic<ULONGLONG> g_lastAvailGain;  // 可用内存净增量（含待机缓存）
 extern std::atomic<ULONGLONG> g_lastCleanTickMs;

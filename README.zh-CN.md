@@ -28,6 +28,7 @@
   <a href="#命令行">命令行</a> ·
   <a href="#占用">占用</a> ·
   <a href="#从源码构建">构建</a> ·
+  <a href="#规划">规划</a> ·
   <a href="CHANGELOG.md">更新日志</a>
 </p>
 
@@ -45,6 +46,8 @@
 ## 这是什么
 
 MemSweep 回收闲置后台进程占用的内存，你正在用的程序不受影响。它只有一个 exe：不装驱动、不起服务、不联网，也不会改你没要求过的系统设置。
+
+做这个工具，是因为这类软件的常见失败方式太一致：刷写修改页把整台机器卡死的（Mem Reduct 的 issue、WinMemoryCleaner「五次优化三次卡死」的反馈），按固定间隔清理把外壳一起带崩的（CleanMem），以及把曲线拉低但下次加载更慢的「内存加速」。MemSweep 走的是另一条路：按真实压力决定，只动闲置的后台内存，并且把实际发生的事报告出来。
 
 | | |
 |:---|:---|
@@ -83,7 +86,7 @@ MemSweep 回收闲置后台进程占用的内存，你正在用的程序不受�
 
 ## 安装
 
-从 [Releases](https://github.com/feiyu-labs/MemSweep/releases/latest) 下载 `MemSweep-v1.9.16-x64.zip` 或 `MemSweep-v1.9.16-arm64.zip`，解压后右键 `install.cmd`，选择**以管理员身份运行**。
+从 [Releases](https://github.com/feiyu-labs/MemSweep/releases/latest) 下载 `MemSweep-v1.9.17-x64.zip` 或 `MemSweep-v1.9.17-arm64.zip`，解压后右键 `install.cmd`，选择**以管理员身份运行**。
 
 脚本把 `MemSweep.exe` 复制到 `C:\Program Files\MemSweep\`，注册一个最高权限的登录任务（开机不弹 UAC），创建桌面快捷方式，并让 MemSweep 进入托盘。
 
@@ -122,15 +125,16 @@ Windows 11 26H2（26340）、i7-12800HX、24 GB 内存、150% 缩放。数字为
 
 | | MemSweep | Mem Reduct | WinMemoryCleaner | Process Lasso (SmartTrim) | ISLC |
 |:---|:---:|:---:|:---:|:---:|:---:|
-| 体积 | 403 KB | ~350 KB | ~10 MB（.NET） | ~80 MB（套件） | ~1.5 MB |
-| 托盘占用 | 3.0 MB | ~4.5 MB | ~35 MB | ~45 MB | ~18 MB |
+| 体积 | 403 KB | ~373 KB（安装包） | ~471 KB + .NET | 安装包 ~3.6 MB，全套 ~80 MB | ~1.5 MB |
+| 托盘占用 | 3.0 MB | 未公开 | 未公开 | 未公开 | ~27 MB（MakeUseOf 实测） |
 | 前台免疫 | 窗口、父进程链、120 秒焦点历史 | 无 | 无 | 排除名单 | 无 |
 | 按真实压力触发 | 是 | 否 | 否 | 部分 | 部分 |
-| 刷写修改页 | 从不 | 会 | 会 | 不会 | 不会 |
+| 刷写修改页 | 从不 | 可选 | 会 | 不会 | 不会 |
 | 物理页合并 | 有，可中止 | 无 | 无 | 无 | 无 |
-| ARM64 构建 | 有 | 无 | 无 | 有 | 无 |
+| 原生 ARM64 | 有 | 有 | 无 | 有 | 无 |
+| 自动模式不含易卡死列表 | 是 | 可选 | 否 | 可选 | 否 |
 
-表中描述的是各工具截至 2026 年 11 月的默认设置与已记录行为；同类工具会更新，引用前请核对它们的文档。
+以上为 2026 年 11 月的最新版本与公开行为：Mem Reduct 3.5.2、WinMemoryCleaner 3.0.8、Process Lasso 19.0、ISLC 1.0.4.8。同类工具会更新，引用前请核对它们的文档。这个品类里用户报告的卡死案例（Mem Reduct issue #17/#90、WinMemoryCleaner issue #192、ISLC 论坛帖）就是 MemSweep 触发与通知设计所规避的问题。
 
 ## 从源码构建
 
@@ -165,6 +169,17 @@ build.cmd arm64    :: Windows on ARM64
 ## 参与
 
 欢迎提交问题与改进，请先读 [CONTRIBUTING.md](CONTRIBUTING.md)；安全问题的私下报告方式见 [SECURITY.md](SECURITY.md)。设计取舍记录在 [docs/ENGINEERING.md](docs/ENGINEERING.md)，这些数值背后的调研记录在 [RESEARCH.md](RESEARCH.md)。
+
+## 规划
+
+按这个品类用户反复提出的需求排序：
+
+1. **清理历史**——记录每一次清理的触发原因、动了什么、释放了多少，可以导出，让效果可以被核对。
+2. **winget 包与代码签名**——不用手动核对哈希，直接从包管理器安装和升级。
+3. **按内存区域单独开关**——待机缓存、文件缓存、页面合并各自显式开关，并提供演练预览。
+4. **效果诊断**——清理前后的硬缺页与加载延迟计数，让「有没有用」有数据可查。
+
+不会加入的：结束进程、内存「碎片整理」、定时器分辨率调整、任何联网功能。
 
 ## 许可
 

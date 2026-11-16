@@ -669,7 +669,7 @@ static void TrayUpdate(bool force) {
         g_nid.uVersion = NOTIFYICON_VERSION_4;
         Shell_NotifyIconW(NIM_SETVERSION, &g_nid);
     }
-    g_trayOn = true;
+    if (added) g_trayOn = true;   // 添加失败保持 false，下一次 TrayUpdate 会重试 NIM_ADD
 }
 static void TrayRemove() {
     if (g_trayOn) {
@@ -889,6 +889,9 @@ static void CommitHotkeyCapture(UINT mods, UINT vk) {
     HotkeySpec next;
     next.mods = mods & (MOD_CONTROL | MOD_ALT | MOD_SHIFT | MOD_WIN);
     next.vk = vk;
+    // 小键盘、OEM 标点等键显示不出来，配置里也无法往返——按下即拒绝，
+    // 否则注册成功但 chip 空白，重启后又会回落默认值。
+    if (next.KeyLabel(vk).empty()) { g_hkErr = 2; KickAnim(); return; }
     if (!ApplyHotkey(next, true)) { g_hkErr = 3; KickAnim(); return; }
     g_hkCapture = false;
     g_hkLiveMods = 0;
@@ -2216,10 +2219,13 @@ static DWORD WINAPI CombineThread(LPVOID) {
         g_lastFreeGain = Grow(r.freeAfter, r.freeBefore);
         g_lastAvailGain = Grow(r.availAfter, r.availBefore);
         g_lastCleanTickMs = GetTickCount64();
+        g_lastCleanWasAuto.store(false, std::memory_order_relaxed);   // 手动触发的深度清理
     }
     InterlockedExchange(&g_cleanPhase, 0);
+    if (g_hwnd && !g_cfg.silent) {   // 静默模式下深度清理也不发声
+        PostMessageW(g_hwnd, WM_APP_BALLOON, 1, (LPARAM)new std::wstring(msg));
+    }
     if (g_hwnd) {
-        PostMessageW(g_hwnd, WM_APP_BALLOON, 0, (LPARAM)new std::wstring(msg));
         PostMessageW(g_hwnd, WM_APP_CLEANING, 0, 0);
         PostMessageW(g_hwnd, WM_APP_STATS, 0, 0);
     }
@@ -2604,6 +2610,8 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
                            : Tx(L"开机自启已关闭", L"Start with Windows disabled");
         } else {
             s_autostart = s_autostartInstalled;
+            g_cfg.autostart = s_autostartInstalled;   // 配置同步回真实状态，否则重启后自启会复活
+            SaveConfig();
                 g_toast = Tx(L"开机自启设置失败，请查看日志", L"Couldn't update startup; see log");
         }
         g_lastToastMs = GetTickCount64();
@@ -2955,7 +2963,11 @@ static void DrawSystemSheet(Graphics& g) {
     if (know && !g_sys.compression) warnings++;
     if (know && !g_sys.pageCombining) warnings++;
     if (!g_sys.sysmainRunning) warnings++;
-    if (!(g_sys.pfInitMB >= 24576 && g_sys.pfMaxMB >= 65536)) warnings++;
+    // 页面文件告警与机器内存相关，不再硬编码作者机器的 24–64 GB：
+    // 只在“没有页面文件”或“提交压力大且页面文件不足 8 GB”时提醒
+    bool pfTooSmall = g_sys.pfInitMB > 0 && g_sys.pfMaxMB > 0 && g_sys.pfMaxMB < 8192 && g_sys.commitPct > 90.0;
+    bool pfMissing = g_sys.pfInitMB <= 0 && g_sys.pfMaxMB <= 0;
+    if (pfMissing || pfTooSmall) warnings++;
     if (g_sys.commitPct > 90.0) warnings++;
     if (g_sys.nonpaged > 1024ULL * MB) warnings++;
 
@@ -2996,7 +3008,7 @@ static void DrawSystemSheet(Graphics& g) {
         !g_sys.sysmainRunning);
     swprintf(v, 128, Tx(L"%d–%d MB · 已分配 %llu MB", L"%d–%d MB · allocated %llu MB"),
              g_sys.pfInitMB, g_sys.pfMaxMB, g_sys.pfAllocMB);
-    bool pfWarn = !(g_sys.pfInitMB >= 24576 && g_sys.pfMaxMB >= 65536);
+    bool pfWarn = pfMissing || pfTooSmall;
     row(3, !pfWarn, L"页面文件", L"Pagefile", v, pfWarn);
     swprintf(v, 128, Tx(L"%s / %s · %.0f%%", L"%s / %s · %.0f%%"),
              FormatBytes(g_sys.commitUsed).c_str(), FormatBytes(g_sys.commitLimit).c_str(), g_sys.commitPct);
@@ -3018,7 +3030,7 @@ static void DrawSystemSheet(Graphics& g) {
 
     const bool canMc = g_sys.mmOk && !g_sys.compression;
     const bool canPc = g_sys.mmOk && !g_sys.pageCombining;
-    const bool canPf = (g_sys.pfInitMB != 24576 || g_sys.pfMaxMB != 65536);
+    const bool canPf = (g_sys.pfInitMB > 0 || g_sys.pfMaxMB > 0);   // 有页面文件才能调整
     const bool canWsl = g_sys.wslEnabled;
     ReleaseSRWLockShared(&g_sysLock);
 
@@ -3140,12 +3152,25 @@ static void SysActionWorker(int id) {
             RunPS(L"Set-Service SysMain -StartupType Automatic; Start-Service SysMain; Enable-MMAgent -pc");
             Log(L"系统检查：确保 SysMain 自动启动，并启用页面合并");
         }
-    } else if (id == 3 && (st.pfInitMB != 24576 || st.pfMaxMB != 65536)) {
-        if (confirm(L"将页面文件调整为 24576–65536 MB？\n\n需要重启生效。",
-                    L"Set pagefile to 24576–65536 MB?\n\nRequires a reboot.")) {
-            RunPS(L"Get-CimInstance Win32_PageFileSetting -Filter \"Name='d:\\\\pagefile.sys'\" | "
-                  L"Set-CimInstance -Property @{InitialSize=24576;MaximumSize=65536}");
-            Log(L"系统检查：页面文件调整为 24576–65536 MB（重启生效）");
+    } else if (id == 3 && (st.pfInitMB > 0 || st.pfMaxMB > 0)) {
+        // 目标大小与这台机器的物理内存相关，不再硬编码 24–64 GB
+        MEMORYSTATUSEX ms{};
+        ms.dwLength = sizeof(ms);
+        GlobalMemoryStatusEx(&ms);
+        int initMB = (int)(ms.ullTotalPhys / MB);
+        int maxMB = initMB * 2;
+        if (initMB < 8192) initMB = 8192;
+        if (maxMB < 16384) maxMB = 16384;
+        wchar_t ask[256];
+        swprintf(ask, 256, Tx(L"把页面文件调整为 %d–%d MB？\n\n对每一个已配置的页面文件生效，需要重启。",
+                              L"Set pagefile to %d–%d MB?\n\nApplies to every configured pagefile; reboot required."),
+                 initMB, maxMB);
+        if (confirm(ask, ask)) {
+            std::wstring ps = L"Get-CimInstance Win32_PageFileSetting | ForEach-Object { "
+                              L"Set-CimInstance -InputObject $_ -Property @{InitialSize=" + std::to_wstring(initMB)
+                              + L";MaximumSize=" + std::to_wstring(maxMB) + L"} }";
+            RunPS(ps);
+            Log(L"系统检查：页面文件调整为 %d–%d MB（重启生效）", initMB, maxMB);
         }
     } else if (id == 4 && st.wslEnabled) {
         if (confirm(L"为 WSL 写入 autoMemoryReclaim=gradual？", L"Set WSL autoMemoryReclaim=gradual?")) {
@@ -3490,6 +3515,16 @@ int RunUI(HINSTANCE hInst, bool showOnStart) {
     }
 
     g_msgTaskbarCreated = RegisterWindowMessageW(L"TaskbarCreated");
+
+    // 前台焦点历史改为事件驱动：窗口切到前台时立刻记录，
+    // 只靠 5 秒轮询时，一闪而过的前台应用会漏掉 120 秒保护窗口。
+    SetWinEventHook(EVENT_SYSTEM_FOREGROUND, EVENT_SYSTEM_FOREGROUND, nullptr,
+                    [](HWINEVENTHOOK, DWORD, HWND hwnd, LONG idObject, LONG, DWORD, DWORD) {
+                        if (idObject != OBJID_WINDOW || !hwnd) return;
+                        DWORD pid = 0;
+                        GetWindowThreadProcessId(hwnd, &pid);
+                        if (pid) NoteFocus(pid);
+                    }, 0, 0, WINEVENT_OUTOFCONTEXT);
 
     WNDCLASSEXW wc{};
     wc.cbSize = sizeof(wc);
