@@ -1276,7 +1276,7 @@ static void DrawHome(Graphics& g) {
             sysDesc = Tx(L"建议优化 1 项", L"1 recommendation");
             sysColor = T.warn;
         } else {
-            sysDesc = Tx(L"状态良好 · 压缩开启", L"All optimal · Compressed");
+            sysDesc = Tx(L"状态良好 · 压缩开启", L"Healthy · compression on");
         }
     }
     DrawHomeCard(g, L.cardSystem, ID_HOME_SYSTEM,
@@ -1384,7 +1384,7 @@ static void DrawProcessSheet(Graphics& g) {
     RefreshDrawSnap();
     BuildProcessRows();
     TextAt(g, Tx(L"点击右侧「保护」，清理时跳过该应用——不释放它的内存",
-                 L"Click Protect to skip this app when cleaning - its memory is left alone"),
+                 L"Click Protect to skip this app when cleaning — its memory is left alone"),
            L.procSub, f11, T.text3);
     TextAt(g, Tx(L"应用", L"App"), RectF(L.procHeader.X, L.procHeader.Y, 120, 14), f11, T.text3);
     TextAt(g, Tx(L"内存", L"Memory"), RectF(L.procHeader.GetRight() - 142, L.procHeader.Y, 80, 14),
@@ -1505,7 +1505,7 @@ static void DrawSettingsSheet(Graphics& g) {
 
 static void DrawAdvancedSheet(Graphics& g) {
     DrawSheetFrame(g, L"高级设置", L"Advanced", true);
-    TextAt(g, Tx(L"只清理大于", L"Clean above"), L.advMinLbl, f12, T.text2);
+    TextAt(g, Tx(L"只清理大于", L"Min working set"), L.advMinLbl, f12, T.text2);
     const wchar_t* mwZh[3] = { L"64 MB", L"128 MB", L"256 MB" };
     const wchar_t* mwEn[3] = { L"64 MB", L"128 MB", L"256 MB" };
     DrawSeg(g, L.advMinSeg, mwZh, mwEn, 3, g_minWSSel);
@@ -2792,10 +2792,10 @@ static void DrawSystemSheet(Graphics& g) {
                  FormatBytes(g_sys.nonpaged).c_str(), FormatBytes(g_sys.paged).c_str());
         row(7, g_sys.nonpaged <= 1024ULL * MB, L"内核内存", L"Kernel memory", v, g_sys.nonpaged > 1024ULL * MB);
         row(8, true, L"WSL 内存回收", L"WSL memory reclaim",
-            g_sys.wslEnabled ? Tx(L"可配置", L"available") : Tx(L"未启用", L"not enabled"), false);
+            g_sys.wslEnabled ? Tx(L"可配置", L"configurable") : Tx(L"未启用", L"not enabled"), false);
     }
 
-    TextAt(g, g_systemExpanded ? Tx(L"收起 ‹", L"less ‹") : Tx(L"更多状态 ›", L"more ›"),
+    TextAt(g, g_systemExpanded ? Tx(L"收起 ‹", L"Show less ‹") : Tx(L"更多状态 ›", L"Show more ›"),
            L.sysMore, f12, g_hover == ID_SYS_MORE ? T.accent : T.text2);
 
     const bool canMc = g_sys.mmOk && !g_sys.compression;
@@ -3326,7 +3326,7 @@ int RunUI(HINSTANCE hInst, bool showOnStart) {
     bool firstRun = GetFileAttributesW(ConfigPath().c_str()) == INVALID_FILE_ATTRIBUTES;
     if (firstRun || showOnStart) {
         BringMainToFront();
-        g_toast = Tx(L"欢迎使用 MemSweep · 按 Ctrl+Shift+M 随时清理", L"Welcome to MemSweep · press Ctrl+Shift+M");
+        g_toast = Tx(L"欢迎使用 MemSweep · 按 Ctrl+Shift+M 随时清理", L"Welcome to MemSweep · Ctrl+Shift+M cleans anytime");
         g_lastToastMs = GetTickCount64();
         if (firstRun) SaveConfig();
     }
