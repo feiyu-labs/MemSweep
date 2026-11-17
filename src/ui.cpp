@@ -687,6 +687,9 @@ static bool ForegroundCoversMonitor() {
     if (!GetClassNameW(fg, cls, 64)) return false;
     if (!wcscmp(cls, L"Progman") || !wcscmp(cls, L"WorkerW") || !wcscmp(cls, L"Shell_TrayWnd"))
         return false;   // 桌面/任务栏不算
+    // 有标题栏样式的窗口（普通最大化窗口）不算全屏，避免自动隐藏任务栏的用户
+    // 在最大化状态下永远收不到通知；无边框游戏没有 WS_CAPTION。
+    if (GetWindowLongW(fg, GWL_STYLE) & WS_CAPTION) return false;
     RECT r{};
     if (!GetWindowRect(fg, &r)) return false;
     MONITORINFO mi{};
@@ -1701,7 +1704,9 @@ static void DrawAdvancedSheet(Graphics& g) {
     DrawSeg(g, L.advIdleSeg, idZh, idEn, 3, g_idleSel);
     DrawAdvancedHotkeyRow(g);
     DrawSwitchRow(g, L.advEcoRow, L"后台效率模式", L"Efficiency mode", s_eco,
-                  ToggleValue(ID_TG_ECO, s_eco));
+                  ToggleValue(ID_TG_ECO, s_eco),
+                  Tx(L"清理时给闲置后台进程打上效率标记（EcoQoS），系统调度和内存回收先照顾前台",
+                     L"Cleans tag idle background processes with EcoQoS, so scheduling and reclaim favor the foreground"));
     wchar_t idleSubZh[128] = {}, idleSubEn[128] = {};
     if (g_cfg.idleDeepSecs >= 60) {
         int m = g_cfg.idleDeepSecs / 60;
@@ -1779,7 +1784,9 @@ static void DrawToast(Graphics& g) {
 static void RefreshDrawSnap() {
     if (!g_drawDirty) return;
     EnterCriticalSection(&g_lock);
-    g_drawSnap = g_snap;
+    // 交换而非拷贝：省掉每秒一次的全量进程表复制（455 项 ≈ 0.3ms）；
+    // g_snap 的旧内容留在 g_drawSnap 里，下一轮 TakeSnapshot 会整体覆盖。
+    std::swap(g_drawSnap, g_snap);
     LeaveCriticalSection(&g_lock);
     g_drawDirty = false;
 }

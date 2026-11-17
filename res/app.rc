@@ -2,8 +2,8 @@
 1 24 "app.manifest"
 
 1 VERSIONINFO
-FILEVERSION     1,9,17,0
-PRODUCTVERSION  1,9,17,0
+FILEVERSION     1,9,18,0
+PRODUCTVERSION  1,9,18,0
 BEGIN
   BLOCK "StringFileInfo"
   BEGIN
@@ -11,8 +11,8 @@ BEGIN
     BEGIN
       VALUE "FileDescription", "MemSweep"
       VALUE "ProductName", "MemSweep"
-      VALUE "FileVersion", "1.9.17.0"
-      VALUE "ProductVersion", "1.9.17.0"
+      VALUE "FileVersion", "1.9.18.0"
+      VALUE "ProductVersion", "1.9.18.0"
       VALUE "OriginalFilename", "MemSweep.exe"
     END
   END

@@ -1,5 +1,35 @@
 # Changelog
 
+## v1.9.18 — 2026-11-17
+
+### 「后台效率模式」加说明（用户看不懂的开关就该说清楚）
+- 高级设置里该开关新增副标题：清理时给闲置后台进程打上效率标记（EcoQoS），
+  系统调度和内存回收先照顾前台。实现本来就存在（SetProcessInformation
+  ProcessPowerThrottling + 内存优先级 LOW，关闭时 RevertBackgroundTaming 恢复），
+  缺的只是那句解释。
+
+### 全屏判断修复
+- `ForegroundCoversMonitor()` 此前会把「自动隐藏任务栏 + 最大化窗口」误判为全屏，
+  导致这类用户永远收不到通知。现在叠加 `WS_CAPTION` 风格检查：
+  普通最大化窗口有标题栏样式，无边框游戏没有。
+
+### 内部优化
+- `RefreshDrawSnap` 由整表拷贝（455 项进程 ≈ 每 45KB/秒）改为 `std::swap` 原地交换；
+  写入方每轮 TakeSnapshot 都会整体覆盖 g_snap，交换出的旧内容无副作用。
+- 二进制体积维持 417,792 字节：eco 说明新增字符串与全屏判断相抵。
+  此前记录的体积实验结论不变：`-Oz + gc-sections + strip` 已是 zig cc 的实际最优，
+  字符串合并等实验收益为零。
+
+### README / 发布链路
+- 对比表新增「清理记录」一行（MemSweep 文本日志+诊断导出；Mem Reduct 文本日志；
+  WinMemoryCleaner JSON 事件日志；ISLC 无）。
+- 规划更新：界面版清理历史刻意不做（保持轻量，日志文件已有全部信息）；
+  winget 提前到第一项。
+- 新增 `packaging/winget/make-winget-manifest.ps1`：为任意 tag 生成 winget 三件套
+  （version/installer/locale，zip+portable 双架构，含发布资产 SHA256），
+  v1.9.17 的清单已生成在 `packaging/winget/manifests/`，提交 PR 的步骤写在脚本头部。
+
+## v1.9.17 — 2026-11-17
 ## v1.9.17 — 2026-11-17
 
 ### 代码全面复核（无 P0/P1；8 项修复）

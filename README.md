@@ -87,7 +87,7 @@ It exists because of how this tool category usually fails: cleaners that flush m
 
 ## Install
 
-Download `MemSweep-v1.9.17-x64.zip` or `MemSweep-v1.9.17-arm64.zip` from [Releases](https://github.com/feiyu-labs/MemSweep/releases/latest), extract it, then right-click `install.cmd` and choose **Run as administrator**.
+Download `MemSweep-v1.9.18-x64.zip` or `MemSweep-v1.9.18-arm64.zip` from [Releases](https://github.com/feiyu-labs/MemSweep/releases/latest), extract it, then right-click `install.cmd` and choose **Run as administrator**.
 
 The script copies `MemSweep.exe` to `C:\Program Files\MemSweep\`, registers a logon task with elevated privileges so startup never prompts, adds a desktop shortcut and starts MemSweep in the tray.
 
@@ -132,6 +132,7 @@ A manual clean on this machine has reclaimed 1–3 GB of free pages; the amount 
 | Trigger checks real pressure | Yes | No | No | Partial | Partial |
 | Modified-page flush | Never | Optional | Yes | No | No |
 | Page combining | Yes, abortable | No | No | No | No |
+| Clean record | Text log + diagnostics export | Text log | JSON event log | Yes | No |
 | Native ARM64 | Yes | Yes | No | Yes | No |
 | Automatic mode omits freeze-prone lists | Yes | Optional | No | Optional | No |
 
@@ -175,10 +176,11 @@ Bug reports and pull requests are welcome — see [CONTRIBUTING.md](CONTRIBUTING
 
 In order, driven by what users of this category keep asking for:
 
-1. **Clean history** — every pass logged with its trigger, what it touched and what it freed, exportable, so results are checkable instead of taken on faith.
-2. **winget package and code signing** — install and update from the package manager without hash-checking by hand.
-3. **Per-area cleaning opt-in** — standby, file cache and page combining as explicit switches with a dry-run preview of what each would reclaim.
-4. **Impact diagnostics** — page-fault and reload-latency counters before and after a pass, so "did this help" has a measurement.
+1. **winget package and code signing** — install and update from the package manager without hash-checking by hand.
+2. **Per-area cleaning opt-in** — standby, file cache and page combining as explicit switches with a dry-run preview of what each would reclaim.
+3. **Impact diagnostics** — page-fault and reload-latency counters before and after a pass, so "did this help" has a measurement.
+
+A UI clean-history page was considered and deliberately skipped — the text log already records every pass (trigger, areas, reclaimed, duration), and keeping the app light wins over a second data surface.
 
 Things that will not be added: process termination, RAM "defragmentation", timer-resolution changes, anything that runs network code.
 
