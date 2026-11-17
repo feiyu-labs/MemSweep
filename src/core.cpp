@@ -1,6 +1,5 @@
 // MemSweep — 核心引擎实现
 #include "core.h"
-#include <array>
 
 namespace ms {
 
@@ -46,15 +45,23 @@ void PublishConfig(const Config& c) {
     ReleaseSRWLockExclusive(&g_cfgLock);
 }
 
+struct PidTrack {
+    DWORD pid = 0;
+    unsigned long long createTime = 0;
+    unsigned long long cpu100ns = 0;
+    ULONGLONG lastMoveMs = 0;
+    ULONGLONG lastTrimMs = 0;
+    unsigned long long wsAtTrim = 0;
+    unsigned char hotTicks = 0;
+    bool ecoMarked = false;
+    bool cpuRestrained = false;
+};
+
 static DWORD g_selfPid = 0;
 static DWORD g_selfSession = 0;
 static DWORD g_fgPid = 0;
-static std::deque<std::pair<DWORD, ULONGLONG>> g_focusHist;
-static std::unordered_map<DWORD, std::array<unsigned long long, 3>> g_idleMap; // cpu, lastMoveMs, createTime
-static std::unordered_map<DWORD, std::array<unsigned long long, 3>> g_trimRec; // createTime, lastTrimMs, wsAtTrim
-static std::unordered_set<DWORD> g_ecoMarked;
-static std::unordered_map<DWORD, std::array<unsigned long long, 3>> g_cpuRestrained; // pid -> {createTime, 0, 0}
-static std::unordered_map<DWORD, std::array<unsigned long long, 3>> g_cpuBurst;      // pid -> {prevCpu, hotTicks, 0}
+static std::vector<std::pair<DWORD, ULONGLONG>> g_focusHist;
+static std::vector<PidTrack> g_pids;   // 按 pid 升序，单表统一空闲/修剪记忆/EcoQoS/CPU让路
 static ULONGLONG g_lastCpuCheckMs = 0;
 static DWORD g_cpuCount = 0;
 static unsigned long long g_prevHardFaults = 0;
@@ -62,15 +69,27 @@ static ULONGLONG g_prevTickMs = 0;
 static std::atomic<int> g_runtimeIdleSecs{300};
 static std::atomic<ULONGLONG> g_pauseUntil{0};
 
-struct ImpactProbe {
-    bool pending = false;
-    ULONGLONG cleanEndMs = 0;
-    unsigned long long availBefore = 0, freeBefore = 0;
-    unsigned long long gainAvail = 0, gainFree = 0;
-    double hfBefore = 0.0, hfAfter = 0.0;
-};
-static ImpactProbe g_impactProbe;
-static std::wstring g_lastImpactSummary;
+static PidTrack* FindPid(DWORD pid) {
+    auto it = std::lower_bound(g_pids.begin(), g_pids.end(), pid,
+                               [](const PidTrack& a, DWORD p) { return a.pid < p; });
+    return (it != g_pids.end() && it->pid == pid) ? &*it : nullptr;
+}
+static PidTrack& UpsertPid(DWORD pid, unsigned long long ct) {
+    auto it = std::lower_bound(g_pids.begin(), g_pids.end(), pid,
+                               [](const PidTrack& a, DWORD p) { return a.pid < p; });
+    if (it != g_pids.end() && it->pid == pid) return *it;
+    PidTrack t{};
+    t.pid = pid; t.createTime = ct;
+    return *g_pids.insert(it, t);
+}
+
+DWORD ForegroundPid() {
+    HWND fg = GetForegroundWindow();
+    if (!fg) return 0;
+    DWORD pid = 0;
+    GetWindowThreadProcessId(fg, &pid);
+    return pid;
+}
 
 // ---------------------------------------------------------------------------
 // NT 定义（数值来源：phnt ntexapi.h，已核对）
@@ -195,7 +214,7 @@ std::wstring ConfigDir() {
 std::wstring ConfigPath() { return ConfigDir() + L"\\config.ini"; }
 std::wstring LogPath() { return ConfigDir() + L"\\log.txt"; }
 
-static std::wstring ReadTextUtf8(const std::wstring& path) {
+std::wstring ReadTextUtf8(const std::wstring& path) {
     HANDLE h = CreateFileW(path.c_str(), GENERIC_READ,
                            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr,
                            OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
@@ -205,7 +224,7 @@ static std::wstring ReadTextUtf8(const std::wstring& path) {
     if (sz.QuadPart <= 0 || sz.QuadPart > (16 << 20)) { CloseHandle(h); return L""; }
     std::string raw((size_t)sz.QuadPart, 0);
     DWORD rd = 0;
-    ReadFile(h, raw.data(), (DWORD)raw.size(), &rd, nullptr);
+    if (!ReadFile(h, raw.data(), (DWORD)raw.size(), &rd, nullptr)) rd = 0;
     CloseHandle(h);
     raw.resize(rd);
     if (raw.size() >= 3 && (unsigned char)raw[0] == 0xEF && (unsigned char)raw[1] == 0xBB && (unsigned char)raw[2] == 0xBF)
@@ -215,24 +234,24 @@ static std::wstring ReadTextUtf8(const std::wstring& path) {
     if (wl) MultiByteToWideChar(CP_UTF8, 0, raw.data(), (int)raw.size(), w.data(), wl);
     return w;
 }
-static bool WriteTextUtf8(const std::wstring& path, const std::wstring& data) {
-    CreateDirectoryW(ConfigDir().c_str(), nullptr);
+bool WriteTextUtf8(const std::wstring& path, const std::wstring& data, bool atomic) {
+    if (atomic) CreateDirectoryW(ConfigDir().c_str(), nullptr);
     int l = WideCharToMultiByte(CP_UTF8, 0, data.c_str(), (int)data.size(), nullptr, 0, nullptr, nullptr);
     std::string raw(l, 0);
     if (l) WideCharToMultiByte(CP_UTF8, 0, data.c_str(), (int)data.size(), raw.data(), l, nullptr, nullptr);
-    std::wstring tmp = path + L".tmp";
-    HANDLE h = CreateFileW(tmp.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+    std::wstring target = atomic ? (path + L".tmp") : path;
+    HANDLE h = CreateFileW(target.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
     if (h == INVALID_HANDLE_VALUE) return false;
     DWORD wr1 = 0, wr2 = 0;
     BOOL w1 = WriteFile(h, "\xEF\xBB\xBF", 3, &wr1, nullptr);
-    BOOL w2 = WriteFile(h, raw.data(), (DWORD)raw.size(), &wr2, nullptr);
+    BOOL w2 = raw.empty() || WriteFile(h, raw.data(), (DWORD)raw.size(), &wr2, nullptr);
     CloseHandle(h);
     if (!w1 || wr1 != 3 || !w2 || wr2 != (DWORD)raw.size()) {
-        // 写入失败（磁盘满/杀软锁定）时保留旧配置，绝不拿半截文件替换
-        DeleteFileW(tmp.c_str());
+        // 写入失败（磁盘满/杀软锁定）时保留旧文件，绝不拿半截文件替换
+        DeleteFileW(target.c_str());
         return false;
     }
-    return MoveFileExW(tmp.c_str(), path.c_str(), MOVEFILE_REPLACE_EXISTING) != 0;
+    return !atomic || MoveFileExW(target.c_str(), path.c_str(), MOVEFILE_REPLACE_EXISTING) != 0;
 }
 
 static int ParseConfigInt(const std::wstring& raw, int d) {
@@ -253,7 +272,7 @@ static bool ParseConfigBool(const std::wstring& raw, bool d) {
 
 void LoadConfig() {
     std::wstring txt = ReadTextUtf8(ConfigPath());
-    std::unordered_map<std::wstring, std::wstring> kv;
+    std::vector<std::pair<std::wstring, std::wstring>> kv;
     size_t pos = 0;
     while (pos < txt.size()) {
         size_t e = txt.find(L'\n', pos);
@@ -263,10 +282,18 @@ void LoadConfig() {
         if (line.empty() || line[0] == L'#' || line[0] == L'[') continue;
         size_t eq = line.find(L'=');
         if (eq == std::wstring::npos) continue;
-        kv[ToLower(TrimW(line.substr(0, eq)))] = TrimW(line.substr(eq + 1));
+        std::wstring key = ToLower(TrimW(line.substr(0, eq)));
+        std::wstring val = TrimW(line.substr(eq + 1));
+        bool updated = false;
+        for (auto& p : kv) { if (p.first == key) { p.second = val; updated = true; break; } }
+        if (!updated) kv.push_back({ std::move(key), std::move(val) });
     }
-    auto get  = [&](const wchar_t* k) { auto it = kv.find(k); return it == kv.end() ? std::wstring() : it->second; };
-    auto has  = [&](const wchar_t* k) { return kv.find(k) != kv.end(); };
+    auto findKv = [&](const wchar_t* k) -> const std::wstring* {
+        for (const auto& p : kv) if (p.first == k) return &p.second;
+        return nullptr;
+    };
+    auto get  = [&](const wchar_t* k) { const auto* v = findKv(k); return v ? *v : std::wstring(); };
+    auto has  = [&](const wchar_t* k) { return findKv(k) != nullptr; };
     auto parseInt = [&](const wchar_t* k, int d) { return ParseConfigInt(get(k), d); };
     auto getB = [&](const wchar_t* k, bool d) { return ParseConfigBool(get(k), d); };
 
@@ -563,8 +590,6 @@ bool TakeSnapshot(Snapshot& s) {
         pi.ws = (unsigned long long)p->WorkingSetSize;
         pi.wsPrivate = (unsigned long long)p->WorkingSetPrivateSize;
         if (!pi.wsPrivate) pi.wsPrivate = pi.ws;   // 极少数系统进程该字段为 0
-        pi.commit = p->PrivatePageCount ? (unsigned long long)p->PrivatePageCount
-                                        : (unsigned long long)p->PagefileUsage;
         pi.createTime = (unsigned long long)p->CreateTime.QuadPart;
         pi.cpu100ns = (unsigned long long)p->UserTime.QuadPart + (unsigned long long)p->KernelTime.QuadPart;
         hfSum += p->HardFaultCount;
@@ -594,8 +619,10 @@ void NoteFocus(DWORD pid) {
     EnterCriticalSection(&g_lock);
     g_fgPid = pid;
     g_focusHist.push_back({ pid, now });
-    while (g_focusHist.size() > 96) g_focusHist.pop_front();
-    wasTamed = (g_ecoMarked.count(pid) != 0) || (g_cpuRestrained.count(pid) != 0);
+    if (g_focusHist.size() > 96)
+        g_focusHist.erase(g_focusHist.begin(), g_focusHist.begin() + (g_focusHist.size() - 96));
+    if (auto* tr = FindPid(pid))
+        wasTamed = tr->ecoMarked || tr->cpuRestrained;
     LeaveCriticalSection(&g_lock);
     if (wasTamed) RestorePidIfTamed(pid);
 }
@@ -603,44 +630,17 @@ void PruneFocusHistory(const Config& c) {
     ULONGLONG now = GetTickCount64();
     ULONGLONG ttl = (ULONGLONG)c.focusHistorySec * 1000;
     EnterCriticalSection(&g_lock);
-    while (!g_focusHist.empty() && now - g_focusHist.front().second > ttl)
-        g_focusHist.pop_front();
-    LeaveCriticalSection(&g_lock);
-}
-static void UpdateIdleMap(const Snapshot& s) {
-    ULONGLONG now = GetTickCount64();
-    EnterCriticalSection(&g_lock);
-    std::unordered_set<DWORD> alive;
-    alive.reserve(s.procs.size() * 2);
-    for (const auto& p : s.procs) {
-        alive.insert(p.pid);
-        auto& rec = g_idleMap[p.pid];
-        if (rec[2] != p.createTime) {
-            rec[0] = p.cpu100ns; rec[1] = now; rec[2] = p.createTime;
-        } else {
-            unsigned long long delta = p.cpu100ns > rec[0] ? p.cpu100ns - rec[0] : 0;
-            unsigned long long dtMs = now > rec[1] ? now - rec[1] : 1;
-            // 仅当 CPU 增量超过单核 0.5%（dtMs*50）才算“有活动”，
-            // 忽略聊天心跳/浏览器定时器等微量抖动，避免大进程永不被判空闲。
-            if (delta > dtMs * 50) rec[1] = now;
-            rec[0] = p.cpu100ns;
-        }
-    }
-    for (auto it = g_idleMap.begin(); it != g_idleMap.end();) {
-        if (!alive.count(it->first)) it = g_idleMap.erase(it); else ++it;
-    }
-    for (auto it = g_trimRec.begin(); it != g_trimRec.end();) {
-        if (!alive.count(it->first)) it = g_trimRec.erase(it); else ++it;
-    }
+    size_t expired = 0;
+    while (expired < g_focusHist.size() && now - g_focusHist[expired].second > ttl)
+        expired++;
+    if (expired) g_focusHist.erase(g_focusHist.begin(), g_focusHist.begin() + expired);
     LeaveCriticalSection(&g_lock);
 }
 static bool IsIdle(DWORD pid) {
     EnterCriticalSection(&g_lock);
-    auto it = g_idleMap.find(pid);
-    bool idle = false;
-    if (it != g_idleMap.end())
-        idle = (GetTickCount64() - it->second[1]) >=
-               (ULONGLONG)g_runtimeIdleSecs.load(std::memory_order_relaxed) * 1000;
+    const PidTrack* tr = FindPid(pid);
+    bool idle = tr && (GetTickCount64() - tr->lastMoveMs) >=
+                      (ULONGLONG)g_runtimeIdleSecs.load(std::memory_order_relaxed) * 1000;
     LeaveCriticalSection(&g_lock);
     return idle;
 }
@@ -661,56 +661,69 @@ static bool IsBuiltinName(const std::wstring& n) {
     for (const wchar_t* b : kBuiltin) if (n == b) return true;
     return false;
 }
-static std::unordered_set<std::wstring> g_whitelistSet;
+static std::vector<std::wstring> g_whitelistVec;
+static bool InWhitelistLocked(const std::wstring& n) {
+    for (const auto& w : g_whitelistVec) if (w == n) return true;
+    return false;
+}
 void RebuildWhitelist() {
     Config c = GetConfigSnapshot();
-    std::unordered_set<std::wstring> next;
+    std::vector<std::wstring> next;
     for (auto raw : SplitCSV(c.whitelist)) {
-        // 手输 chrome.exe 与 chrome 等价：集合里统一口径，匹配才一致
+        // 手输 chrome.exe 与 chrome 等价：统一口径，匹配才一致
         std::wstring n = NormalizeProcName(raw);
-        if (!n.empty()) next.insert(n);
+        if (!n.empty() && std::find(next.begin(), next.end(), n) == next.end())
+            next.push_back(std::move(n));
     }
     EnterCriticalSection(&g_lock);
-    g_whitelistSet.swap(next);
+    g_whitelistVec.swap(next);
     LeaveCriticalSection(&g_lock);
 }
-static std::unordered_set<DWORD> BuildProtectedPids(const Snapshot& s) {
-    std::unordered_set<DWORD> set;
+static bool ContainsPid(const std::vector<DWORD>& pids, DWORD pid) {
+    for (DWORD x : pids) if (x == pid) return true;
+    return false;
+}
+static std::vector<DWORD> BuildProtectedPids(const Snapshot& s) {
+    std::vector<DWORD> set;
+    set.reserve(32);
+    auto addPid = [&](DWORD pid) {
+        if (pid && !ContainsPid(set, pid)) set.push_back(pid);
+    };
     EnterCriticalSection(&g_lock);
-    set.insert(g_fgPid);
-    for (auto& f : g_focusHist) set.insert(f.first);
+    addPid(g_fgPid);
+    for (const auto& f : g_focusHist) addPid(f.first);
     LeaveCriticalSection(&g_lock);
-    std::unordered_map<DWORD, DWORD> parent;
-    parent.reserve(s.procs.size() * 2);
-    for (auto& p : s.procs) parent[p.pid] = p.ppid;
-    // 焦点进程父链
-    std::vector<DWORD> seeds(set.begin(), set.end());
-    for (DWORD pid : seeds) {
-        DWORD cur = pid;
+
+    // 焦点进程父链（种子通常 <20 个，直接顺着 s.procs 查找，省掉临时索引表与排序模板）
+    size_t seedCount = set.size();
+    for (size_t idx = 0; idx < seedCount; idx++) {
+        DWORD cur = set[idx];
         for (int i = 0; i < 8; i++) {
-            auto it = parent.find(cur);
-            if (it == parent.end() || it->second <= 4) break;
-            cur = it->second;
-            set.insert(cur);
+            DWORD parentPid = 0;
+            for (const auto& p : s.procs) {
+                if (p.pid == cur) { parentPid = p.ppid; break; }
+            }
+            if (parentPid <= 4) break;
+            cur = parentPid;
+            addPid(cur);
         }
     }
     return set;
 }
-bool IsProtectedProcess(const ProcInfo& p, const std::unordered_set<DWORD>& protectedPids) {
+bool IsProtectedProcess(const ProcInfo& p, const std::vector<DWORD>& protectedPids) {
     if (p.pid <= 4 || p.pid == g_selfPid) return true;
     if (p.name.empty()) return true;
     std::wstring low = NormalizeProcName(p.name);   // 快照自带 .exe 后缀，名单不带
     if (IsBuiltinName(low)) return true;
     EnterCriticalSection(&g_lock);
-    bool wl = g_whitelistSet.count(low) != 0;
+    bool wl = InWhitelistLocked(low);
     LeaveCriticalSection(&g_lock);
     if (wl) return true;
-    if (protectedPids.count(p.pid)) return true;
-    return false;
+    return ContainsPid(protectedPids, p.pid);
 }
 
 // 单一候选判定（策略计数与执行共用，保证一致）
-static bool EligibleForTrim(const ProcInfo& p, const std::unordered_set<DWORD>& protPids,
+static bool EligibleForTrim(const ProcInfo& p, const std::vector<DWORD>& protPids,
                             const Config& c, bool requireIdle, int minWSMB, bool checkTrimMemory,
                             bool highCompPressure = false) {
     // 会话 ID 已在 TakeSnapshot 时读入 p.sessionId，不必再对 400+ 进程逐个调 ProcessIdToSessionId
@@ -720,15 +733,13 @@ static bool EligibleForTrim(const ProcInfo& p, const std::unordered_set<DWORD>& 
     if (requireIdle && !IsIdle(p.pid)) return false;
     if (checkTrimMemory) {
         EnterCriticalSection(&g_lock);
-        auto it = g_trimRec.find(p.pid);
+        const PidTrack* tr = FindPid(p.pid);
         bool blocked = false;
-        if (it != g_trimRec.end() && it->second[0] == p.createTime) {
-            ULONGLONG last = it->second[1];
-            unsigned long long wsAt = it->second[2];
+        if (tr && tr->lastTrimMs && tr->createTime == p.createTime) {
             ULONGLONG now = GetTickCount64();
             ULONGLONG holdMs = (ULONGLONG)c.trimMemorySec * (highCompPressure ? 2000ULL : 1000ULL);
-            if (now - last < holdMs &&
-                p.ws < wsAt + wsAt / 2)   // 增长不足 1.5 倍则跳过
+            if (now - tr->lastTrimMs < holdMs &&
+                p.ws < tr->wsAtTrim + tr->wsAtTrim / 2)   // 增长不足 1.5 倍则跳过
                 blocked = true;
         }
         LeaveCriticalSection(&g_lock);
@@ -753,29 +764,21 @@ size_t CountTrimCandidates(const Snapshot& s, bool requireIdle, int minWSMB, con
     return n;
 }
 
-ReclaimBreakdown ComputeReclaimBreakdown(const Snapshot& s, const Config& c) {
-    ReclaimBreakdown b;
-    b.standbyLowBytes = s.m.standbyByPrio[0];
-    b.standbyHighBytes = s.m.standbyBytes > b.standbyLowBytes
-                       ? s.m.standbyBytes - b.standbyLowBytes : 0;
-    b.compressedBytes = s.m.compressedBytes;
-    b.commitPct = s.m.commitPct;
+unsigned long long ComputeReclaimable(const Snapshot& s, const Config& c, size_t* candidatesOut) {
     auto prot = BuildProtectedPids(s);
     const bool compHigh = IsHighCompPressure(s.m);
+    size_t candidates = 0;
+    unsigned long long trimPriv = 0;
     for (const auto& p : s.procs) {
         if (p.ws < (unsigned long long)c.minWSAutoMB * MB) break;
         if (!EligibleForTrim(p, prot, c, true, c.minWSAutoMB, true, compHigh)) continue;
-        b.trimCandidates++;
-        b.trimPrivBytes += p.wsPrivate ? p.wsPrivate : p.ws;
+        candidates++;
+        trimPriv += p.wsPrivate ? p.wsPrivate : p.ws;
     }
-    return b;
-}
-
-unsigned long long ComputeReclaimable(const Snapshot& s, const Config& c, size_t* candidatesOut) {
-    ReclaimBreakdown b = ComputeReclaimBreakdown(s, c);
-    if (candidatesOut) *candidatesOut = b.trimCandidates;
-    return (c.purgeFullManual || c.sysCache) ? s.m.standbyBytes + b.trimPrivBytes
-                                             : b.standbyLowBytes + b.trimPrivBytes;
+    if (candidatesOut) *candidatesOut = candidates;
+    unsigned long long standby = (c.purgeFullManual || c.sysCache)
+                               ? s.m.standbyBytes : s.m.standbyByPrio[0];
+    return standby + trimPriv;
 }
 
 // ---------------------------------------------------------------------------
@@ -899,46 +902,49 @@ static bool SetIoPriority(HANDLE h, bool low) {
     ULONG prio = low ? IO_PRIORITY_LOW : IO_PRIORITY_NORMAL;
     return NtSetInformationProcess(h, PIC_ProcessIoPriority, &prio, sizeof(prio)) == 0;
 }
-static void RestorePidIfTamed(DWORD pid) {
-    bool wasEco = false, wasCpu = false;
-    unsigned long long ct = 0;
-    EnterCriticalSection(&g_lock);
-    wasEco = g_ecoMarked.erase(pid) != 0;
-    auto cit = g_cpuRestrained.find(pid);
-    if (cit != g_cpuRestrained.end()) {
-        wasCpu = true;
-        ct = cit->second[0];
-        g_cpuRestrained.erase(cit);
-    }
-    LeaveCriticalSection(&g_lock);
-    if (!wasEco && !wasCpu) return;
+static bool RestoreProcessTaming(DWORD pid, unsigned long long ct, bool wasEco, bool wasCpu) {
     HANDLE h = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_SET_INFORMATION, FALSE, pid);
-    if (!h) return;
-    if (wasEco) {
-        SetEcoQoS(h, false);
-        SetMemPriorityNormal(h);
-        SetIoPriority(h, false);
-    }
-    if (wasCpu) {
-        FILETIME ftCreate{}, ftExit{}, ftKernel{}, ftUser{};
-        if (GetProcessTimes(h, &ftCreate, &ftExit, &ftKernel, &ftUser)) {
-            ULARGE_INTEGER u{};
-            u.LowPart = ftCreate.dwLowDateTime; u.HighPart = ftCreate.dwHighDateTime;
-            if (u.QuadPart == ct && GetPriorityClass(h) == BELOW_NORMAL_PRIORITY_CLASS) {
-                SetPriorityClass(h, NORMAL_PRIORITY_CLASS);
+    if (!h) return false;
+    bool cpuRestored = false;
+    FILETIME ftC{}, ftE{}, ftK{}, ftU{};
+    if (GetProcessTimes(h, &ftC, &ftE, &ftK, &ftU)) {
+        ULARGE_INTEGER u{};
+        u.LowPart = ftC.dwLowDateTime; u.HighPart = ftC.dwHighDateTime;
+        if (u.QuadPart == ct) {
+            if (wasEco) {
+                SetEcoQoS(h, false);
+                SetMemPriorityNormal(h);
             }
+            if (wasCpu && GetPriorityClass(h) == BELOW_NORMAL_PRIORITY_CLASS) {
+                if (SetPriorityClass(h, NORMAL_PRIORITY_CLASS)) cpuRestored = true;
+            }
+            if (wasEco || wasCpu) SetIoPriority(h, false);
         }
-        SetIoPriority(h, false);
     }
     CloseHandle(h);
+    return cpuRestored;
+}
+
+static void RestorePidIfTamed(DWORD pid) {
+    unsigned long long ct = 0;
+    bool wasEco = false, wasCpu = false;
+    EnterCriticalSection(&g_lock);
+    if (auto* tr = FindPid(pid)) {
+        ct = tr->createTime;
+        wasEco = tr->ecoMarked; tr->ecoMarked = false;
+        wasCpu = tr->cpuRestrained; tr->cpuRestrained = false;
+        tr->hotTicks = 0;
+    }
+    LeaveCriticalSection(&g_lock);
+    if (wasEco || wasCpu) RestoreProcessTaming(pid, ct, wasEco, wasCpu);
 }
 
 static void NoteTrim(const ProcInfo& p) {
     EnterCriticalSection(&g_lock);
-    auto& rec = g_trimRec[p.pid];
-    rec[0] = p.createTime;
-    rec[1] = GetTickCount64();
-    rec[2] = p.ws;
+    PidTrack& tr = UpsertPid(p.pid, p.createTime);
+    tr.createTime = p.createTime;
+    tr.lastTrimMs = GetTickCount64();
+    tr.wsAtTrim = p.ws;
     LeaveCriticalSection(&g_lock);
 }
 
@@ -956,12 +962,7 @@ void RunClean(const CleanPlan& plan, const Config& c, CleanResult& r, HANDLE can
     }
 
     // 清理前补种当前焦点（CLI/无 UI 场景下同样保护前台）
-    HWND fg = GetForegroundWindow();
-    if (fg) {
-        DWORD fpid = 0;
-        GetWindowThreadProcessId(fg, &fpid);
-        if (fpid) NoteFocus(fpid);
-    }
+    if (DWORD fpid = ForegroundPid()) NoteFocus(fpid);
 
     Snapshot ownBefore;
     if (!initialSnap && !TakeSnapshot(ownBefore)) {
@@ -988,73 +989,44 @@ void RunClean(const CleanPlan& plan, const Config& c, CleanResult& r, HANDLE can
         if (plan.sysCache)  r.cache = TrimSystemFileCache();
     }
 
-    // 2) 修剪工作集
+    // 2) 修剪工作集与/或后台效率标记（合并单循环）
     const bool compHigh = IsHighCompPressure(before.m);
-    if (plan.trimWS) {
+    if (plan.trimWS || plan.eco) {
+        const DWORD access = (plan.trimWS ? PROCESS_SET_QUOTA : 0) |
+                             PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_SET_INFORMATION;
+        const ULONGLONG budget = (plan.trimWS && !plan.isAuto) ? 6000 : 2000;
         for (const auto& p : before.procs) {
             if (cancel && WaitForSingleObject(cancel, 0) == WAIT_OBJECT_0) {
                 r.aborted = true;
                 break;
             }
             if (p.ws < (unsigned long long)plan.minWSMB * MB) break;   // 已降序
-            if (!EligibleForTrim(p, prot, c, plan.requireIdle, plan.minWSMB, true, compHigh)) continue;
+            if (!EligibleForTrim(p, prot, c, plan.requireIdle, plan.minWSMB, plan.trimWS, compHigh)) continue;
             // 保护集是清理开始时的快照；手动清理可跑 6 秒，期间用户可能切到别的应用。
             // 每轮再问一次当前前台，避免修剪刚切过去的窗口。
-            HWND fgNow = GetForegroundWindow();
-            if (fgNow) {
-                DWORD fgPid = 0;
-                GetWindowThreadProcessId(fgNow, &fgPid);
-                if (fgPid == p.pid) continue;
-            }
-            r.candidates++;
-            HANDLE h = OpenProcess(PROCESS_SET_QUOTA | PROCESS_QUERY_LIMITED_INFORMATION |
-                                   PROCESS_SET_INFORMATION, FALSE, p.pid);
+            if (ForegroundPid() == p.pid) continue;
+            if (plan.trimWS) r.candidates++;
+            HANDLE h = OpenProcess(access, FALSE, p.pid);
             if (!h) continue;
-            r.attempted++;
-            if (EmptyWorkingSet(h)) {
-                r.trimmed++;
-                NoteTrim(p);
-                if (plan.eco) {
-                    if (SetMemPriorityLow(h)) { SetEcoQoS(h, true); SetIoPriority(h, true); }
-                    EnterCriticalSection(&g_lock);
-                    g_ecoMarked.insert(p.pid);
-                    LeaveCriticalSection(&g_lock);
-                    r.eco++;
-                }
+            bool ok = true;
+            if (plan.trimWS) {
+                r.attempted++;
+                ok = EmptyWorkingSet(h) != FALSE;
+                if (ok) { r.trimmed++; NoteTrim(p); }
             }
-            CloseHandle(h);
-            ULONGLONG budget = plan.isAuto ? 2000 : 6000;
-            if (GetTickCount64() - t0 > budget) {
-                Log(L"修剪预算用尽（%llums），提前结束：已处理 %d 个", (unsigned long long)budget, r.trimmed);
-                break;
-            }
-        }
-    } else if (plan.eco) {
-        // 仅驯服、不修剪
-        for (const auto& p : before.procs) {
-            if (cancel && WaitForSingleObject(cancel, 0) == WAIT_OBJECT_0) {
-                r.aborted = true;
-                break;
-            }
-            if (p.ws < (unsigned long long)plan.minWSMB * MB) break;
-            if (!EligibleForTrim(p, prot, c, plan.requireIdle, plan.minWSMB, false, compHigh)) continue;
-            HWND fgNow = GetForegroundWindow();
-            if (fgNow) {
-                DWORD fgPid = 0;
-                GetWindowThreadProcessId(fgNow, &fgPid);
-                if (fgPid == p.pid) continue;
-            }
-            HANDLE h = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_SET_INFORMATION, FALSE, p.pid);
-            if (!h) continue;
-            if (SetMemPriorityLow(h) && SetEcoQoS(h, true)) {
+            if (ok && plan.eco && SetMemPriorityLow(h) && SetEcoQoS(h, true)) {
                 SetIoPriority(h, true);
                 EnterCriticalSection(&g_lock);
-                g_ecoMarked.insert(p.pid);
+                UpsertPid(p.pid, p.createTime).ecoMarked = true;
                 LeaveCriticalSection(&g_lock);
                 r.eco++;
             }
             CloseHandle(h);
-            if (GetTickCount64() - t0 > 2000) break;  // 仅驯服模式固定 2s
+            if (GetTickCount64() - t0 > budget) {
+                if (plan.trimWS)
+                    Log(L"修剪预算用尽（%llums），提前结束：已处理 %d 个", (unsigned long long)budget, r.trimmed);
+                break;
+            }
         }
     }
 
@@ -1104,51 +1076,28 @@ void LogCleanResult(const wchar_t* mode, size_t candidates, const CleanResult& r
 }
 
 void RevertBackgroundTaming() {
-    std::unordered_set<DWORD> marked;
-    std::unordered_map<DWORD, std::array<unsigned long long, 3>> cpuRestrained;
+    struct TameItem { DWORD pid; unsigned long long ct; bool eco; bool cpu; };
+    std::vector<TameItem> items;
     EnterCriticalSection(&g_lock);
-    marked.swap(g_ecoMarked);
-    cpuRestrained.swap(g_cpuRestrained);
-    g_cpuBurst.clear();
-    LeaveCriticalSection(&g_lock);
-    for (DWORD pid : marked) {
-        HANDLE h = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_SET_INFORMATION, FALSE, pid);
-        if (!h) continue;
-        SetEcoQoS(h, false);
-        SetMemPriorityNormal(h);
-        SetIoPriority(h, false);
-        CloseHandle(h);
-    }
-    int cpuRestored = 0;
-    for (const auto& kv : cpuRestrained) {
-        HANDLE h = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_SET_INFORMATION, FALSE, kv.first);
-        if (!h) continue;
-        FILETIME ftCreate{}, ftExit{}, ftKernel{}, ftUser{};
-        if (GetProcessTimes(h, &ftCreate, &ftExit, &ftKernel, &ftUser)) {
-            ULARGE_INTEGER u{};
-            u.LowPart = ftCreate.dwLowDateTime; u.HighPart = ftCreate.dwHighDateTime;
-            if (u.QuadPart == kv.second[0] && GetPriorityClass(h) == BELOW_NORMAL_PRIORITY_CLASS) {
-                if (SetPriorityClass(h, NORMAL_PRIORITY_CLASS)) cpuRestored++;
-            }
+    for (auto& tr : g_pids) {
+        if (tr.ecoMarked || tr.cpuRestrained) {
+            items.push_back({ tr.pid, tr.createTime, tr.ecoMarked, tr.cpuRestrained });
+            tr.ecoMarked = false;
+            tr.cpuRestrained = false;
         }
-        SetIoPriority(h, false);
-        CloseHandle(h);
+        tr.hotTicks = 0;
     }
-    if (!marked.empty() || cpuRestored > 0)
-        Log(L"已撤销后台调度标记：能效 %u 个，CPU 优先级 %d 个",
-            (unsigned)marked.size(), cpuRestored);
-}
-
-std::wstring GetLastImpactSummary() {
-    EnterCriticalSection(&g_lock);
-    std::wstring s = g_lastImpactSummary;
     LeaveCriticalSection(&g_lock);
-    return s;
+    int ecoCount = 0, cpuRestored = 0;
+    for (const auto& it : items) {
+        if (it.eco) ecoCount++;
+        if (RestoreProcessTaming(it.pid, it.ct, it.eco, it.cpu)) cpuRestored++;
+    }
+    if (ecoCount > 0 || cpuRestored > 0)
+        Log(L"已撤销后台调度标记：能效 %d 个，CPU 优先级 %d 个", ecoCount, cpuRestored);
 }
 
-std::vector<AppMemAgg> AggregateApps(const Snapshot& s, bool sortByCommit) {
-    std::unordered_map<std::wstring, size_t> idxByName;
-    idxByName.reserve(128);
+std::vector<AppMemAgg> AggregateApps(const Snapshot& s) {
     std::vector<AppMemAgg> out;
     out.reserve(128);
     for (const auto& p : s.procs) {
@@ -1156,32 +1105,33 @@ std::vector<AppMemAgg> AggregateApps(const Snapshot& s, bool sortByCommit) {
         std::wstring n = NormalizeProcName(p.name);
         if (n.empty()) continue;
         const unsigned long long priv = p.wsPrivate ? p.wsPrivate : p.ws;
-        auto it = idxByName.find(n);
-        if (it == idxByName.end()) {
+        AppMemAgg* found = nullptr;
+        for (auto& a : out) {
+            if (a.name == n) { found = &a; break; }
+        }
+        if (!found) {
             AppMemAgg a;
-            a.name = n;
+            a.name = std::move(n);
             a.display = p.name;
             if (a.display.size() > 4 &&
                 _wcsicmp(a.display.c_str() + a.display.size() - 4, L".exe") == 0)
                 a.display.resize(a.display.size() - 4);
             a.count = 1;
             a.priv = priv;
-            a.commit = p.commit;
-            idxByName[n] = out.size();
             out.push_back(std::move(a));
         } else {
-            AppMemAgg& a = out[it->second];
-            a.count++;
-            a.priv += priv;
-            a.commit += p.commit;
+            found->count++;
+            found->priv += priv;
         }
     }
-    std::sort(out.begin(), out.end(), [sortByCommit](const AppMemAgg& a, const AppMemAgg& b) {
-        unsigned long long va = sortByCommit ? a.commit : a.priv;
-        unsigned long long vb = sortByCommit ? b.commit : b.priv;
-        if (va != vb) return va > vb;
-        return a.name < b.name;
-    });
+    for (size_t i = 1; i < out.size(); i++) {
+        for (size_t j = i; j > 0; j--) {
+            bool swapIt = (out[j].priv != out[j - 1].priv) ? (out[j].priv > out[j - 1].priv)
+                                                            : (out[j].name < out[j - 1].name);
+            if (!swapIt) break;
+            std::swap(out[j], out[j - 1]);
+        }
+    }
     return out;
 }
 
@@ -1226,18 +1176,6 @@ static DWORD WINAPI CleanThreadProc(LPVOID param) {
         g_lastFreeGain = r.freeGain;
         g_lastAvailGain = r.availGain;
         g_lastCleanTickMs = doneMs;
-    }
-    if (!isAuto && !r.aborted) {
-        EnterCriticalSection(&g_lock);
-        g_impactProbe.pending = true;
-        g_impactProbe.cleanEndMs = doneMs;
-        g_impactProbe.availBefore = r.availBefore;
-        g_impactProbe.freeBefore = r.freeBefore;
-        g_impactProbe.gainAvail = r.availGain;
-        g_impactProbe.gainFree = r.freeGain;
-        g_impactProbe.hfBefore = s.m.hardFaultsPerSec;
-        g_impactProbe.hfAfter = g_hfPerSec.load(std::memory_order_relaxed);
-        LeaveCriticalSection(&g_lock);
     }
 
     LogCleanResult(isAuto ? L"自动" : L"手动", (size_t)r.candidates, r);
@@ -1295,12 +1233,7 @@ bool StartCleanAsync(bool isAuto) {
 
 // 手动清理（含演练）
 void RequestManualClean(bool dryRun) {
-    HWND fg = GetForegroundWindow();
-    if (fg) {
-        DWORD fpid = 0;
-        GetWindowThreadProcessId(fg, &fpid);
-        if (fpid) NoteFocus(fpid);
-    }
+    if (DWORD fpid = ForegroundPid()) NoteFocus(fpid);
     // 非 dry-run 的快照/策略由 StartCleanAsync 的工作线程完成；
     // UI 线程这里不能再整表遍历，否则点击瞬间会掉帧。
     if (!dryRun) {
@@ -1314,23 +1247,11 @@ void RequestManualClean(bool dryRun) {
         return;
     }
     Config cfg = GetConfigSnapshot();
-    ReclaimBreakdown bd = ComputeReclaimBreakdown(s, cfg);
     CleanPlan plan = PlanManual(cfg);
     Log(L"【演练】计划：修剪=%d(%dMB, 闲置门=%d) 低优先级缓存=%d 全量缓存=%d 文件缓存=%d 合并页=%d 后台抑制=%d",
         (int)plan.trimWS, plan.minWSMB, (int)plan.requireIdle,
         (int)plan.purgeLow, (int)plan.purgeFull, (int)plan.sysCache,
         (int)plan.combine, (int)plan.eco);
-    Log(L"【演练】分区可回收：低优缓存 %s，高优缓存 %s，闲置后台进程 %d 个（专用 %s），压缩存储 %s，提交 %.0f%%",
-        FormatBytes(bd.standbyLowBytes).c_str(), FormatBytes(bd.standbyHighBytes).c_str(),
-        (int)bd.trimCandidates, FormatBytes(bd.trimPrivBytes).c_str(),
-        FormatBytes(bd.compressedBytes).c_str(), bd.commitPct);
-    // 聚合统计 Top 8 应用的提交与专用工作集，定位高提交的真正来源
-    auto apps = AggregateApps(s, true);
-    for (size_t i = 0; i < apps.size() && i < 8; i++) {
-        Log(L"  提交占用 Top%d: %-22s x%-2d 专用=%8s 提交=%8s",
-            (int)(i + 1), apps[i].name.c_str(), apps[i].count,
-            FormatBytes(apps[i].priv).c_str(), FormatBytes(apps[i].commit).c_str());
-    }
     auto prot = BuildProtectedPids(s);
     int shown = 0;
     for (const auto& p : s.procs) {
@@ -1435,81 +1356,85 @@ static bool StartIdleDeepAsync() {
     return true;
 }
 
-// 动态后台 CPU / I/O 调度让路（仅当用户开启「后台效率模式」且正在操作其他窗口时启用）：
-// 非前台、非保护的后台进程连续 2 个采样周期占满 >=12% 总 CPU，则临时降为 BELOW_NORMAL + 低 I/O；
-// 一旦回落到 <5%、切回前台、关闭开关或程序退出，立即恢复 NORMAL，永不持久化改动。
-static void ApplyBackgroundCpuRestraint(const Snapshot& s, const Config& cfg, ULONGLONG now) {
-    if (!cfg.ecoQoS) return;
+// 单遍进程跟踪：同步维护空闲时间、修剪记忆，并在开启「后台效率模式」时对高占用后台动态 CPU/I/O 让路
+static void UpdateProcessTracking(const Snapshot& s, const Config& cfg, ULONGLONG now) {
     if (!g_cpuCount) {
         SYSTEM_INFO si{};
         GetSystemInfo(&si);
         g_cpuCount = si.dwNumberOfProcessors ? si.dwNumberOfProcessors : 1;
     }
-    if (!g_lastCpuCheckMs || now <= g_lastCpuCheckMs) {
-        g_lastCpuCheckMs = now;
-        EnterCriticalSection(&g_lock);
-        for (const auto& p : s.procs) {
-            if (p.pid > 4) g_cpuBurst[p.pid] = { p.cpu100ns, 0, 0 };
-        }
-        LeaveCriticalSection(&g_lock);
-        return;
-    }
-    const ULONGLONG dtMs = now - g_lastCpuCheckMs;
-    g_lastCpuCheckMs = now;
-    if (dtMs < 1500) return;
-    const double denom = (double)dtMs * 10000.0 * (double)g_cpuCount;
-    auto prot = BuildProtectedPids(s);
+    const ULONGLONG dtCpuMs = (g_lastCpuCheckMs && now > g_lastCpuCheckMs) ? (now - g_lastCpuCheckMs) : 0;
+    const bool sampleCpu = !g_lastCpuCheckMs || dtCpuMs >= 1500;
+    if (sampleCpu) g_lastCpuCheckMs = now;
+    const bool doCpu = cfg.ecoQoS && dtCpuMs >= 1500;
+    const double denom = dtCpuMs ? (double)dtCpuMs * 10000.0 * (double)g_cpuCount : 1.0;
 
-    struct CpuTarget { DWORD pid; unsigned long long ct; std::wstring name; };
-    std::vector<CpuTarget> toRestrain;
-    std::vector<CpuTarget> toRestore;
-    std::unordered_set<DWORD> alive;
-    alive.reserve(s.procs.size() * 2);
+    std::vector<DWORD> prot;
+    if (doCpu) prot = BuildProtectedPids(s);
+
+    struct CpuAction { DWORD pid; unsigned long long ct; std::wstring name; bool eco; };
+    std::vector<CpuAction> toRestrain, toRestore;
+
+    std::vector<PidTrack> next;
+    next.reserve(s.procs.size());
 
     EnterCriticalSection(&g_lock);
     for (const auto& p : s.procs) {
-        if (p.pid <= 4 || p.pid == g_selfPid) continue;
-        alive.insert(p.pid);
+        if (p.pid <= 4) continue;
+        PidTrack tr{};
+        tr.pid = p.pid;
+        tr.createTime = p.createTime;
+        tr.cpu100ns = p.cpu100ns;
+        tr.lastMoveMs = now;
 
-        bool exempt = (!cfg.allSessions && p.sessionId != g_selfSession);
-        if (!exempt) {
-            if (p.name.empty() || IsBuiltinName(NormalizeProcName(p.name)) ||
-                g_whitelistSet.count(NormalizeProcName(p.name)) != 0 ||
-                prot.count(p.pid) != 0)
-                exempt = true;
-        }
-        auto bit = g_cpuBurst.find(p.pid);
-        double pct = 0.0;
-        if (bit != g_cpuBurst.end() && p.cpu100ns >= bit->second[0])
-            pct = 100.0 * (double)(p.cpu100ns - bit->second[0]) / denom;
-        auto& rec = g_cpuBurst[p.pid];
-        rec[0] = p.cpu100ns;
-        if (exempt) {
-            rec[1] = 0;
-            auto rit = g_cpuRestrained.find(p.pid);
-            if (rit != g_cpuRestrained.end()) {
-                toRestore.push_back({ p.pid, rit->second[0], p.name });
-                g_cpuRestrained.erase(rit);
+        if (const PidTrack* prev = FindPid(p.pid); prev && prev->createTime == p.createTime) {
+            tr.lastMoveMs = prev->lastMoveMs;
+            tr.lastTrimMs = prev->lastTrimMs;
+            tr.wsAtTrim = prev->wsAtTrim;
+            tr.hotTicks = prev->hotTicks;
+            tr.ecoMarked = prev->ecoMarked;
+            tr.cpuRestrained = prev->cpuRestrained;
+
+            unsigned long long delta = p.cpu100ns > prev->cpu100ns ? p.cpu100ns - prev->cpu100ns : 0;
+            unsigned long long dtIdleMs = now > prev->lastMoveMs ? now - prev->lastMoveMs : 1;
+            // 仅当 CPU 增量超过单核 0.5%（dtMs*50）才算“有活动”，
+            // 忽略聊天心跳/浏览器定时器等微量抖动，避免大进程永不被判空闲。
+            if (delta > dtIdleMs * 50) tr.lastMoveMs = now;
+
+            if (doCpu && p.pid != g_selfPid) {
+                std::wstring norm = NormalizeProcName(p.name);
+                bool exempt = (!cfg.allSessions && p.sessionId != g_selfSession) ||
+                              norm.empty() || IsBuiltinName(norm) || InWhitelistLocked(norm) ||
+                              ContainsPid(prot, p.pid);
+                if (exempt) {
+                    tr.hotTicks = 0;
+                    if (tr.cpuRestrained) {
+                        toRestore.push_back({ p.pid, p.createTime, p.name, tr.ecoMarked });
+                        tr.cpuRestrained = false;
+                    }
+                } else {
+                    double pct = 100.0 * (double)delta / denom;
+                    if (pct >= 12.0) {
+                        if (tr.hotTicks < 10) tr.hotTicks++;
+                    } else {
+                        tr.hotTicks = 0;
+                    }
+                    if (tr.hotTicks >= 2 && !tr.cpuRestrained) {
+                        toRestrain.push_back({ p.pid, p.createTime, p.name, false });
+                    } else if (pct < 5.0 && tr.cpuRestrained) {
+                        toRestore.push_back({ p.pid, p.createTime, p.name, tr.ecoMarked });
+                        tr.cpuRestrained = false;
+                    }
+                }
             }
-            continue;
         }
-        if (pct >= 12.0) rec[1]++;
-        else rec[1] = 0;
-
-        auto rit = g_cpuRestrained.find(p.pid);
-        if (rec[1] >= 2 && rit == g_cpuRestrained.end()) {
-            toRestrain.push_back({ p.pid, p.createTime, p.name });
-        } else if (pct < 5.0 && rit != g_cpuRestrained.end()) {
-            toRestore.push_back({ p.pid, rit->second[0], p.name });
-            g_cpuRestrained.erase(rit);
-        }
+        next.push_back(tr);
     }
-    for (auto it = g_cpuBurst.begin(); it != g_cpuBurst.end();) {
-        if (!alive.count(it->first)) it = g_cpuBurst.erase(it); else ++it;
-    }
-    for (auto it = g_cpuRestrained.begin(); it != g_cpuRestrained.end();) {
-        if (!alive.count(it->first)) it = g_cpuRestrained.erase(it); else ++it;
-    }
+    qsort(next.data(), next.size(), sizeof(PidTrack), [](const void* a, const void* b) -> int {
+        DWORD pa = ((const PidTrack*)a)->pid, pb = ((const PidTrack*)b)->pid;
+        return (pa > pb) - (pa < pb);
+    });
+    g_pids.swap(next);
     LeaveCriticalSection(&g_lock);
 
     for (const auto& item : toRestrain) {
@@ -1519,49 +1444,14 @@ static void ApplyBackgroundCpuRestraint(const Snapshot& s, const Config& cfg, UL
             SetPriorityClass(h, BELOW_NORMAL_PRIORITY_CLASS)) {
             SetIoPriority(h, true);
             EnterCriticalSection(&g_lock);
-            g_cpuRestrained[item.pid] = { item.ct, 0, 0 };
+            if (auto* tr = FindPid(item.pid); tr && tr->createTime == item.ct) tr->cpuRestrained = true;
             LeaveCriticalSection(&g_lock);
             Log(L"后台让路：%s (PID %u) → 低于正常 CPU + 低 I/O 优先级", item.name.c_str(), item.pid);
         }
         CloseHandle(h);
     }
-    for (const auto& item : toRestore) {
-        HANDLE h = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_SET_INFORMATION, FALSE, item.pid);
-        if (!h) continue;
-        FILETIME ftC{}, ftE{}, ftK{}, ftU{};
-        if (GetProcessTimes(h, &ftC, &ftE, &ftK, &ftU)) {
-            ULARGE_INTEGER u{}; u.LowPart = ftC.dwLowDateTime; u.HighPart = ftC.dwHighDateTime;
-            if (u.QuadPart == item.ct && GetPriorityClass(h) == BELOW_NORMAL_PRIORITY_CLASS)
-                SetPriorityClass(h, NORMAL_PRIORITY_CLASS);
-        }
-        SetIoPriority(h, false);
-        CloseHandle(h);
-    }
-}
-
-static void CheckPostCleanImpact(const Snapshot& s, ULONGLONG now) {
-    ImpactProbe p{};
-    EnterCriticalSection(&g_lock);
-    if (g_impactProbe.pending && now >= g_impactProbe.cleanEndMs &&
-        now - g_impactProbe.cleanEndMs >= 10000) {
-        p = g_impactProbe;
-        g_impactProbe.pending = false;
-    }
-    LeaveCriticalSection(&g_lock);
-    if (!p.pending) return;
-
-    unsigned long long retainedFree = Grow(s.m.freeBytes, p.freeBefore);
-    unsigned long long retainedAvail = Grow(s.m.availPhys, p.availBefore);
-    wchar_t buf[256];
-    swprintf(buf, 256,
-             L"空闲净保留 %s（清理时 %s），可用净保留 %s（清理时 %s），硬缺页 %.0f/s → %.0f/s",
-             FormatBytes(retainedFree).c_str(), FormatBytes(p.gainFree).c_str(),
-             FormatBytes(retainedAvail).c_str(), FormatBytes(p.gainAvail).c_str(),
-             p.hfAfter, s.m.hardFaultsPerSec);
-    EnterCriticalSection(&g_lock);
-    g_lastImpactSummary = buf;
-    LeaveCriticalSection(&g_lock);
-    Log(L"[效果复核 +10s] %s", buf);
+    for (const auto& item : toRestore)
+        RestoreProcessTaming(item.pid, item.ct, item.eco, true);
 }
 
 void MonitorTick() {
@@ -1571,7 +1461,6 @@ void MonitorTick() {
     Snapshot s;
     if (!TakeSnapshot(s)) return;
     Config cfg = GetConfigSnapshot();
-    UpdateIdleMap(s);
     PruneFocusHistory(cfg);
 
     bool game = IsFullscreenOrPresenting();
@@ -1580,13 +1469,8 @@ void MonitorTick() {
                  : L"退出全屏/演示模式，自动清理恢复");
     }
 
-    // 焦点兜底
-    HWND fg = GetForegroundWindow();
-    if (fg) {
-        DWORD pid = 0;
-        GetWindowThreadProcessId(fg, &pid);
-        if (pid) NoteFocus(pid);
-    }
+    // 焦点兜底（必须在进程跟踪之前，确保新切前台立即免疫并解除让路）
+    if (DWORD pid = ForegroundPid()) NoteFocus(pid);
 
     ULONGLONG now = GetTickCount64();
     // 高压时放宽空闲阈值：负载 ≥ 阈值+5 或 空闲 < 512MB → 最长 60s
@@ -1606,8 +1490,7 @@ void MonitorTick() {
     g_prevTickMs = now;
     s.m.hardFaultsPerSec = g_hfPerSec.load(std::memory_order_relaxed);
 
-    ApplyBackgroundCpuRestraint(s, cfg, now);
-    CheckPostCleanImpact(s, now);
+    UpdateProcessTracking(s, cfg, now);
 
     bool idleWanted = cfg.idleDeep && !game && !AutoPaused() && !IsBatteryLow() &&
                       IsUserIdle((DWORD)cfg.idleDeepSecs) &&
@@ -1763,12 +1646,7 @@ bool TrimPid(DWORD pid) {
     } else {
         blocked = true;   // 连名字都拿不到，不冒险
     }
-    if (!blocked) {
-        HWND fg = GetForegroundWindow();
-        DWORD fpid = 0;
-        if (fg) GetWindowThreadProcessId(fg, &fpid);
-        blocked = (fpid == pid);
-    }
+    if (!blocked) blocked = (ForegroundPid() == pid);
     BOOL ok = blocked ? FALSE : EmptyWorkingSet(h);
     CloseHandle(h);
     DisablePrivileges();
@@ -1789,13 +1667,8 @@ bool TrimAppByName(const std::wstring& procName, int* trimmedOut, unsigned long 
     for (const auto& p : s.procs) {
         if (!cfg.allSessions && p.sessionId != g_selfSession) continue;
         if (NormalizeProcName(p.name) != target) continue;
-        if (p.pid <= 4 || p.pid == g_selfPid || prot.count(p.pid) != 0) continue;
-        HWND fgNow = GetForegroundWindow();
-        if (fgNow) {
-            DWORD fgPid = 0;
-            GetWindowThreadProcessId(fgNow, &fgPid);
-            if (fgPid == p.pid) continue;
-        }
+        if (p.pid <= 4 || p.pid == g_selfPid || ContainsPid(prot, p.pid)) continue;
+        if (ForegroundPid() == p.pid) continue;
         HANDLE h = OpenProcess(PROCESS_SET_QUOTA | PROCESS_QUERY_LIMITED_INFORMATION, FALSE, p.pid);
         if (!h) continue;
         if (EmptyWorkingSet(h)) {
@@ -1820,10 +1693,9 @@ bool IsBuiltinProtectedName(const std::wstring& name) {
 
 bool IsProtectedName(const std::wstring& name) {
     std::wstring low = NormalizeProcName(name);
-    if (low.empty()) return true;
-    if (IsBuiltinName(low)) return true;
+    if (low.empty() || IsBuiltinName(low)) return true;
     EnterCriticalSection(&g_lock);
-    bool wl = g_whitelistSet.count(low) != 0;
+    bool wl = InWhitelistLocked(low);
     LeaveCriticalSection(&g_lock);
     return wl;
 }
@@ -1844,12 +1716,11 @@ void DumpIdleDiagnostics() {
         ULONGLONG idleMs = 0;
         bool blocked = false;
         EnterCriticalSection(&g_lock);
-        auto it = g_idleMap.find(p.pid);
-        if (it != g_idleMap.end() && now >= it->second[1]) idleMs = now - it->second[1];
-        auto tr = g_trimRec.find(p.pid);
-        if (tr != g_trimRec.end() && tr->second[0] == p.createTime) {
-            if (now - tr->second[1] < (ULONGLONG)cfg.trimMemorySec * 1000 &&
-                p.ws < tr->second[2] + tr->second[2] / 2)
+        if (const PidTrack* tr = FindPid(p.pid)) {
+            if (now >= tr->lastMoveMs) idleMs = now - tr->lastMoveMs;
+            if (tr->lastTrimMs && tr->createTime == p.createTime &&
+                now - tr->lastTrimMs < (ULONGLONG)cfg.trimMemorySec * 1000 &&
+                p.ws < tr->wsAtTrim + tr->wsAtTrim / 2)
                 blocked = true;
         }
         LeaveCriticalSection(&g_lock);
@@ -1951,15 +1822,15 @@ bool SelfTest() {
         chk(pdeep.purgeFull && pdeep.sysCache && pdeep.combine, L"deep manual plan combines pages");
     }
 
-    // 分区估算：正确拆出 P0 低优待机与 P1–7 高优待机
+    // 可回收估算：区分仅 P0 低优缓存（温和）与全量缓存（均衡/深度）
     {
         Snapshot sn;
         sn.m.totalPhys = 24ULL * GB; sn.m.availPhys = 4ULL * GB; sn.m.standbyBytes = 3ULL * GB;
-        sn.m.standbyByPrio[0] = 128ULL * MB; sn.m.standbyByPrio[5] = 3ULL * GB - 128ULL * MB;
-        sn.m.compressedBytes = 2ULL * GB; sn.m.commitPct = 88.0;
-        ReclaimBreakdown bd = ComputeReclaimBreakdown(sn, c);
-        chk(bd.standbyLowBytes == 128ULL * MB && bd.standbyHighBytes == 3ULL * GB - 128ULL * MB,
-            L"ComputeReclaimBreakdown splits P0 and P1..7");
+        sn.m.standbyByPrio[0] = 128ULL * MB;
+        Config cm = c;
+        chk(ComputeReclaimable(sn, cm) == 3ULL * GB, L"ComputeReclaimable balanced includes full standby");
+        cm.purgeFullManual = false; cm.sysCache = false;
+        chk(ComputeReclaimable(sn, cm) == 128ULL * MB, L"ComputeReclaimable mild uses P0 standby");
     }
 
     // 离开时维护：空闲后台 + 低优先级缓存 + 页合并；不清全量缓存/文件缓存

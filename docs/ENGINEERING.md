@@ -84,7 +84,7 @@ build.cmd test     :: dev + /selftest + /idlecheck + /uipng + /checkpng
 | 命令 | 作用 |
 |---|---|
 | `/selftest` | 策略引擎单元测试（exit 0/1） |
-| `/dryrun` | 输出分区可回收明细（低优/高优缓存、闲置候选、压缩/提交）、Top8 提交应用与将修剪进程，不动作 |
+| `/dryrun` | 只列出将修剪的进程和清理计划并写日志，不动作 |
 | `/idlecheck` | 输出 Top30 进程的 WS/空闲秒数/保护/修剪记忆 |
 | `/uipng` / `/checkpng` | 离屏渲染主屏/系统 Sheet（520×600 基准，可配 `MEMSweep_DPISCALE`/`MEMSweep_THEME`） |
 | `/clean` | 单次手动清理（需管理员；已运行实例则转发） |
@@ -127,9 +127,12 @@ build.cmd test     :: dev + /selftest + /idlecheck + /uipng + /checkpng
   `DrawAll(clip)` 仅栅格化失效区）；环境动效只失效仪表矩形；禁止全屏 Invalidate 的高频路径。
 - **托盘纪律**：图标只在整数百分比变化时重建（DIB+GDI+ 绘制开销大）；
   tooltip 变化走 `NIF_TIP` 轻量更新；`Shell_NotifyIcon` IPC 不进入每秒路径。
-- **体积纪律**：`-Oz + -fvisibility=hidden + -fvisibility-inlines-hidden + gc-sections + strip` 为该工具链实测最优，
+- **体积与容器纪律**：`-Oz + -fvisibility=hidden + -fvisibility-inlines-hidden + gc-sections + strip` 为该工具链实测最优，
   `build.cmd` 分离 `obj/app.res` / `obj/app_dev.res` / `obj/app_arm64.res` 避免目标互踩；`SaveConfig()` 用单块
-  `swprintf` 缓冲替代 25 次 `std::to_wstring` 拼接；Sheet 绘制函数加 `noinline` 控制 `DrawAll` 帧膨胀。
+  `swprintf` 缓冲替代 25 次 `std::to_wstring` 拼接；Sheet 绘制函数加 `noinline` 控制 `DrawAll` 帧膨胀；
+  **全项目禁用 `std::unordered_map` / `std::unordered_set` / `std::deque`，避免多余 `std::sort` 实例化**：
+  监控与保护数据统一收敛为按 `pid` 排序的 `PidTrack` 单表（`qsort` + `lower_bound`）、UI 动画用 8 项定长数组、
+  UTF-8 读写与 `ForegroundPid()` 共用 `core.h` 实现（v2.0.1 实测比 v2.0.0 缩小 43 KB，x64 降至 398 KB）。
   已否决 `-falign-*`/`-fmerge-all-constants`（零收益）、unwind 表移除（CRT `.seh_` 编译失败）、
   `--icf`/`--build-id=none`/`--no-insert-timestamp`/`-stdlib=libc++`（不支持或无收益）、
   `-fno-threadsafe-statics`（省 512B，但静态初始化有并发风险）。ico 只保留

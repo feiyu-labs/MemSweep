@@ -1,5 +1,12 @@
 # Changelog
 
+## v2.0.1 — 2026-11-18
+
+### 精简重构与体积回归（441 KB → 398 KB）
+- **砍掉冗余功能**：移除不进界面的 10 秒事后复核常驻状态机（`ImpactProbe`）、独立 `ReclaimBreakdown` 与重复 `/dryrun` 快照、及 `ProcInfo::commit` 导出区段，仅保留高精度高价值的 P5 待机分级、防回弹冷却、后台三维效率调度与按应用聚合视图。
+- **单表统一监控扫描**：把 `g_idleMap`、`g_trimRec`、`g_ecoMarked`、`g_cpuRestrained`、`g_cpuBurst` 五套结构合并为按 `pid` 排序的 `PidTrack` 单表（`g_pids`），`MonitorTick` 单遍扫描同步完成空闲判定与高 CPU 让路；合并 `RunClean` 修剪/驯服双循环，提取 `ForegroundPid()` 与 `ReadTextUtf8`/`WriteTextUtf8` 统一接口，消除跨文件重复代码。
+- **消除 STL 哈希与排序模板膨胀**：移除全部 `std::unordered_map` / `std::unordered_set` / `std::deque` 及多余 `std::sort` 实例化（如 UI 开关动画改为 8 项定长数组、白名单/焦点父链改为轻量线性/二分查找、`PidTrack` 排序改用 C 运行时 `qsort`）。x64 正式版降至 **408,064 字节（398 KB）**，ARM64 降至 **347,136 字节（339 KB）**——比 v2.0.0 缩小 **43 KB**，甚至比 v1.9.20 还小 **14.8 KB**。
+
 ## v2.0.0 — 2026-11-18
 
 ### 清理引擎与系统响应突破

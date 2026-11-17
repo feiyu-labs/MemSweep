@@ -30,17 +30,8 @@ struct Metrics {
 
 struct ProcInfo {
     DWORD pid = 0, ppid = 0, sessionId = 0;
-    unsigned long long ws = 0, wsPrivate = 0, commit = 0, cpu100ns = 0, createTime = 0;
+    unsigned long long ws = 0, wsPrivate = 0, cpu100ns = 0, createTime = 0;
     std::wstring name;
-};
-
-struct ReclaimBreakdown {
-    unsigned long long standbyLowBytes = 0;   // Priority 0 待机缓存
-    unsigned long long standbyHighBytes = 0;  // Priority 1–7 待机缓存
-    unsigned long long trimPrivBytes = 0;     // 符合条件的闲置后台进程专用工作集
-    size_t trimCandidates = 0;
-    unsigned long long compressedBytes = 0;
-    double commitPct = 0.0;
 };
 
 struct Snapshot {
@@ -112,11 +103,15 @@ CleanPlan PlanManual(const Config& c);
 // 离开时维护：只处理空闲后台 + 低优先级缓存 + 合并页；不清全量缓存/文件缓存
 CleanPlan PlanIdle(const Config& c);
 
-// 保护判定与分区可回收估算
-bool IsProtectedProcess(const ProcInfo& p, const std::unordered_set<DWORD>& protectedPids);
+// 保护判定与可回收估算
+bool IsProtectedProcess(const ProcInfo& p, const std::vector<DWORD>& protectedPids);
 size_t CountTrimCandidates(const Snapshot& s, bool requireIdle, int minWSMB, const Config& c);
-ReclaimBreakdown ComputeReclaimBreakdown(const Snapshot& s, const Config& c);
 unsigned long long ComputeReclaimable(const Snapshot& s, const Config& c, size_t* candidatesOut = nullptr);
+
+// 文件与前台通用助手（供 UI 复用）
+std::wstring ReadTextUtf8(const std::wstring& path);
+bool WriteTextUtf8(const std::wstring& path, const std::wstring& data, bool atomic = true);
+DWORD ForegroundPid();
 
 // ---------------------------------------------------------------------------
 // 清理执行
@@ -135,13 +130,12 @@ bool TrimAppByName(const std::wstring& procName, int* trimmedOut = nullptr,
                    unsigned long long* privFreedOut = nullptr);
 bool IsProtectedName(const std::wstring& name);
 bool IsBuiltinProtectedName(const std::wstring& name);
-std::wstring GetLastImpactSummary();
 struct AppMemAgg {
     std::wstring name, display;
     int count = 0;
-    unsigned long long priv = 0, commit = 0;
+    unsigned long long priv = 0;
 };
-std::vector<AppMemAgg> AggregateApps(const Snapshot& s, bool sortByCommit);
+std::vector<AppMemAgg> AggregateApps(const Snapshot& s);
 
 struct CleanResult {
     bool standbyLow = false, standbyFull = false, cache = false;

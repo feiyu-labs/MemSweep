@@ -177,7 +177,7 @@ PagefileUsage@184` 全部正确；`SYSTEM_MEMORY_LIST_INFORMATION`（22×SIZE_T�
 
 - `/dryrun` 按应用名聚合 `PagefileUsage` 实测显示，高提交主要来自多进程应用（如 `chrome` ×53 占提交 9.8 GB、`zcode` ×37 占 5.0 GB、`claude` ×12 占 4.4 GB）。单纯修剪工作集只能缓解物理页紧张，若同时面对后台高 CPU/磁盘分页 I/O 争用，前台仍会卡顿。
 - v2.0 在「后台效率模式」下新增 `NtSetInformationProcess(ProcessIoPriority = 33, IO_PRIORITY_LOW = 1)` 与基于 `MonitorTick` 的可逆动态 CPU 让路（非前台、非保护后台进程连续 2 个采样周期占满 `≥ 12%` 总 CPU 时临时降为 `BELOW_NORMAL_PRIORITY_CLASS`，低于 `5%`、切回前台、关闭开关或退出时立即恢复 `NORMAL_PRIORITY_CLASS`）。
-- 每次手动清理后 10 秒自动复核空闲/可用净保留量与硬缺页变化，写入日志和导出诊断，避免“盲目清理后立刻回弹却无感知”。
+- 在 v2.0.1 中按「短小精简」原则将 5 套每进程哈希表与重复辅助函数整合为单一 `PidTrack` 有序表，并移除不进 UI 的 10 秒事后复核状态机与冗余诊断区段，最终包体回落至 398 KB（小于 v1.9.20 的 413 KB）。
 
 **永不做**：脏页刷盘、注册表刷盘、全局一刀切、定时器分辨率 hack、结束/挂起进程、联网/遥测。
 

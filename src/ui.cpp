@@ -11,7 +11,6 @@
 #include <cmath>
 #include <string>
 #include <vector>
-#include <unordered_map>
 #include <algorithm>
 
 using namespace Gdiplus;
@@ -172,7 +171,9 @@ static int g_pressed = 0;
 static bool g_draggingSlider = false;
 static bool g_snapshotMode = false;
 static float g_sliderValue = 85.0f;
-static std::unordered_map<int, float> g_anim;   // toggle -> 0..1
+struct AnimSlot { int id = 0; float val = 0.0f; };
+static AnimSlot g_anim[8];
+static int g_animCount = 0;
 static float g_gaugeShown = 0.0f;
 static float g_gaugeTarget = 0.0f;
 static float g_spin = 0.0f;
@@ -887,7 +888,7 @@ static void SyncFromConfig() {
     g_wlDraft = g_cfg.whitelist;
     if (g_edWL) SetWindowTextW(g_edWL, g_cfg.whitelist.c_str());
     g_coolDirty = g_minDirty = g_idleDirty = g_strengthDirty = false;
-    g_anim.clear();
+    g_animCount = 0;
 }
 
 // 热键的唯一注册入口：先注销，再注册新的；失败时回滚到旧组合。
@@ -1526,31 +1527,35 @@ static int g_procScroll = 0;
 // 同名多进程（如 chrome/ZCode/claude）合计专用工作集，名字按精确名去 .exe、小写；
 // 系统与 VM 内置保护显示为锁，不可切换。
 static void BuildProcessRows() {
-    auto apps = AggregateApps(g_drawSnap, false);
-    std::unordered_set<std::wstring> wlSet;
+    auto apps = AggregateApps(g_drawSnap);
+    std::vector<std::wstring> wlVec;
     for (auto raw : SplitCSV(g_cfg.whitelist)) {
         std::wstring n = NormalizeProcName(raw);
-        if (!n.empty()) wlSet.insert(n);
+        if (!n.empty() && std::find(wlVec.begin(), wlVec.end(), n) == wlVec.end())
+            wlVec.push_back(std::move(n));
     }
     g_procList.clear();
-    g_procList.reserve(apps.size() + wlSet.size());
-    std::unordered_set<std::wstring> seen;
-    seen.reserve(apps.size() * 2);
+    g_procList.reserve(apps.size() + wlVec.size());
     for (auto& a : apps) {
-        seen.insert(a.name);
         ProcRow r;
         r.name = std::move(a.name);
         r.display = std::move(a.display);
         r.ws = a.priv;
         r.count = a.count;
         r.st = IsBuiltinProtectedName(r.name) ? ProcState::Builtin
-             : (wlSet.count(r.name) ? ProcState::Protected : ProcState::Normal);
+             : (std::find(wlVec.begin(), wlVec.end(), r.name) != wlVec.end() ? ProcState::Protected : ProcState::Normal);
         g_procList.push_back(std::move(r));
     }
-    std::vector<std::wstring> offline(wlSet.begin(), wlSet.end());
-    std::sort(offline.begin(), offline.end());
-    for (const auto& n : offline) {
-        if (seen.count(n)) continue;
+    for (size_t i = 1; i < wlVec.size(); i++) {
+        for (size_t j = i; j > 0 && wlVec[j] < wlVec[j - 1]; j--)
+            std::swap(wlVec[j], wlVec[j - 1]);
+    }
+    for (const auto& n : wlVec) {
+        bool running = false;
+        for (const auto& r : g_procList) {
+            if (r.name == n) { running = true; break; }
+        }
+        if (running) continue;
         ProcRow r;
         r.name = n; r.display = n; r.count = 0; r.st = ProcState::Protected;
         g_procList.push_back(std::move(r));
@@ -1837,8 +1842,10 @@ static void DrawAboutSheet(Graphics& g) {
 }
 
 static float ToggleValue(int id, bool on) {
-    auto it = g_anim.find(id);
-    return it == g_anim.end() ? (on ? 1.0f : 0.0f) : it->second;
+    for (int i = 0; i < g_animCount; i++) {
+        if (g_anim[i].id == id) return g_anim[i].val;
+    }
+    return on ? 1.0f : 0.0f;
 }
 
 static void DrawToast(Graphics& g) {
@@ -1873,7 +1880,7 @@ static void RefreshDrawSnap() {
 
     // 同步更新首页 Top1 应用摘要（复用 AggregateApps，按应用名聚合）
     g_topProcDesc.clear();
-    for (const auto& a : AggregateApps(g_drawSnap, false)) {
+    for (const auto& a : AggregateApps(g_drawSnap)) {
         if (IsBuiltinProtectedName(a.name)) continue;
         g_topProcDesc = a.name + L" · " + FormatBytes(a.priv);
         break;
@@ -1968,15 +1975,15 @@ static bool StepAnimations() {
         need = true;
     }
     // 开关缓动
-    for (auto& kv : g_anim) {
-        int id = kv.first;
+    for (int i = 0; i < g_animCount; i++) {
+        int id = g_anim[i].id;
         bool on = (id == ID_TG_AUTO) ? s_auto : (id == ID_TG_HOTKEY) ? s_hotkey
                 : (id == ID_TG_ECO) ? s_eco
                 : (id == ID_TG_AUTOSTART) ? s_autostart
                 : (id == ID_TG_IDLE_DEEP) ? s_idleDeep : s_silent;
-        float d = (on ? 1.0f : 0.0f) - kv.second;
-        if (fabsf(d) < 0.02f) kv.second = on ? 1.0f : 0.0f;
-        else { kv.second += d * (1.0f - expf(-dt * 14.0f)); need = true; }
+        float d = (on ? 1.0f : 0.0f) - g_anim[i].val;
+        if (fabsf(d) < 0.02f) g_anim[i].val = on ? 1.0f : 0.0f;
+        else { g_anim[i].val += d * (1.0f - expf(-dt * 14.0f)); need = true; }
     }
     // 清理旋转
     if (g_cleaning != 0) {
@@ -2077,7 +2084,11 @@ static void BringMainToFront() {
                    L"Panel opened; if hidden by a fullscreen game, press Alt+Tab"));
 }
 static void ToggleAnimStart(int id, bool prevOn) {
-    if (!g_anim.count(id)) g_anim[id] = prevOn ? 1.0f : 0.0f;
+    bool found = false;
+    for (int i = 0; i < g_animCount; i++) {
+        if (g_anim[i].id == id) { found = true; break; }
+    }
+    if (!found && g_animCount < 8) g_anim[g_animCount++] = { id, prevOn ? 1.0f : 0.0f };
     if (g_hwnd) SetTimer(g_hwnd, 2, 33, nullptr);
 }
 static bool AnimationsEnabled() {
@@ -2984,24 +2995,6 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 // 系统检查窗口
 // ---------------------------------------------------------------------------
 
-static std::wstring ReadTextFileW(const std::wstring& path) {
-    HANDLE h = CreateFileW(path.c_str(), GENERIC_READ,
-                           FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
-                           nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
-    if (h == INVALID_HANDLE_VALUE) return L"";
-    LARGE_INTEGER sz{};
-    if (!GetFileSizeEx(h, &sz) || sz.QuadPart <= 0) { CloseHandle(h); return L""; }
-    std::string raw((size_t)sz.QuadPart, 0);
-    DWORD rd = 0;
-    if (!ReadFile(h, raw.data(), (DWORD)raw.size(), &rd, nullptr)) rd = 0;
-    CloseHandle(h);
-    raw.resize(rd);
-    if (raw.size() >= 3 && (unsigned char)raw[0] == 0xEF) raw = raw.substr(3);
-    int l = MultiByteToWideChar(CP_UTF8, 0, raw.data(), (int)raw.size(), nullptr, 0);
-    std::wstring w(l, 0);
-    if (l) MultiByteToWideChar(CP_UTF8, 0, raw.data(), (int)raw.size(), w.data(), l);
-    return w;
-}
 static bool IsUtf16File(const std::wstring& path) {
     HANDLE h = CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr,
                            OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
@@ -3106,7 +3099,7 @@ static void QuerySysInfo(bool deep) {
             L"'PFPEAK='+($u|Measure-Object PeakUsage -Sum).Sum} "
             L"} | Out-File -Encoding utf8 '" + outPs + L"'";
         RunPS(script);
-        std::wstring txt = ReadTextFileW(outFile);
+        std::wstring txt = ReadTextUtf8(outFile);
         auto has = [&](const wchar_t* k, const wchar_t* v) {
             std::wstring needle = std::wstring(k) + L"=" + v;
             return txt.find(needle) != std::wstring::npos;
@@ -3287,19 +3280,6 @@ static void DrawSystemSheet(Graphics& g) {
     DrawActionButton(g, L.sysBtn[4], Tx(L"导出诊断", L"Diagnostics"), true, false, ID_SYS_EXPORT);
 }
 
-static bool WriteUtf8File(const std::wstring& path, const std::wstring& text) {
-    int l = WideCharToMultiByte(CP_UTF8, 0, text.c_str(), (int)text.size(), nullptr, 0, nullptr, nullptr);
-    std::string raw(l, 0);
-    if (l) WideCharToMultiByte(CP_UTF8, 0, text.c_str(), (int)text.size(), raw.data(), l, nullptr, nullptr);
-    HANDLE h = CreateFileW(path.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
-    if (h == INVALID_HANDLE_VALUE) return false;
-    DWORD wr1 = 0, wr2 = 0;
-    static const BYTE bom[3] = { 0xEF, 0xBB, 0xBF };
-    bool ok = WriteFile(h, bom, 3, &wr1, nullptr) && wr1 == 3 &&
-              (raw.empty() || (WriteFile(h, raw.data(), (DWORD)raw.size(), &wr2, nullptr) && wr2 == (DWORD)raw.size()));
-    CloseHandle(h);
-    return ok;
-}
 static std::wstring DesktopDir() {
     wchar_t p[MAX_PATH] = {};
     if (SHGetFolderPathW(nullptr, CSIDL_DESKTOPDIRECTORY, nullptr, 0, p) == S_OK && p[0])
@@ -3348,27 +3328,8 @@ static void ExportDiagnostics() {
              (int)st.sysmainRunning, (int)st.fastStartupOn, (int)st.wslEnabled,
              st.pagingFiles.c_str(), st.pfInitMB, st.pfMaxMB, st.pfAllocMB);
     out += line;
-    std::wstring impact = GetLastImpactSummary();
-    if (!impact.empty()) {
-        out += L"[last clean impact +10s]\r\n" + impact + L"\r\n\r\n";
-    }
-    {
-        Snapshot snap;
-        if (TakeSnapshot(snap)) {
-            auto apps = AggregateApps(snap, true);
-            out += L"[top apps by commit]\r\n";
-            for (size_t i = 0; i < apps.size() && i < 10; i++) {
-                swprintf(line, 1024, L"%-24s x%-2d priv=%8s commit=%8s\r\n",
-                         apps[i].name.c_str(), apps[i].count,
-                         FormatBytes(apps[i].priv).c_str(),
-                         FormatBytes(apps[i].commit).c_str());
-                out += line;
-            }
-            out += L"\r\n";
-        }
-    }
-    out += L"[config]\r\n" + ReadTextFileW(ConfigPath()) + L"\r\n[log tail]\r\n";
-    std::wstring log = ReadTextFileW(LogPath());
+    out += L"[config]\r\n" + ReadTextUtf8(ConfigPath()) + L"\r\n[log tail]\r\n";
+    std::wstring log = ReadTextUtf8(LogPath());
     std::vector<std::wstring> lines;
     size_t pos = 0;
     while (pos <= log.size()) {
@@ -3381,7 +3342,7 @@ static void ExportDiagnostics() {
     }
     size_t startLine = lines.size() > 80 ? lines.size() - 80 : 0;
     for (size_t i = startLine; i < lines.size(); i++) { out += lines[i]; out += L"\r\n"; }
-    if (WriteUtf8File(path, out)) {
+    if (WriteTextUtf8(path, out, false)) {
         ShellExecuteW(nullptr, L"open", path.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
         Log(L"诊断已导出：%s", path.c_str());
     } else {
@@ -3412,7 +3373,7 @@ static void SysActionWorker(int id, int pfInitMB, int pfMaxMB) {
                          L".wslconfig is UTF-16; save it as UTF-8 first"));
             Log(L"系统检查：.wslconfig 为 UTF-16，未改动");
         } else {
-            std::wstring txt = ReadTextFileW(path);
+            std::wstring txt = ReadTextUtf8(path);
             std::vector<std::wstring> lines;
             size_t pos = 0;
             while (pos <= txt.size()) {
