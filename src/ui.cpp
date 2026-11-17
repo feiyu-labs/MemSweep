@@ -202,6 +202,7 @@ static bool s_auto, s_hotkey, s_eco, s_autostart, s_silent;
 static bool s_idleDeep = false;
 static bool s_autostartInstalled = false;
 static volatile LONG g_autoBusy = 0;
+static volatile LONG g_autoEpoch = 0;   // 启动核对与用户改动竞态：改过就丢弃旧查询结果
 static int  s_threshold;
 
 // 热键录制（快捷键修改）
@@ -616,6 +617,9 @@ static HICON MakeTrayIcon(int pct, bool cleaning) {
     return icon;
 }
 static void TrayUpdate(bool force) {
+    // 图标没加上（登录时外壳还没就绪 / explorer 正在重启）就每次调用都重试 NIM_ADD，
+    // 不能等百分比变化——否则这个会话里永远没有托盘图标。
+    if (!g_trayOn) force = true;
     int pct;
     unsigned long long avail, standby;
     EnterCriticalSection(&g_lock);
@@ -746,8 +750,14 @@ static std::wstring ExePath() {
     GetModuleFileNameW(nullptr, p, MAX_PATH);
     return p;
 }
+// Windows 不一定在 C:，系统工具一律按 %SystemRoot% 解析
+static std::wstring SysDirExe(const wchar_t* rel) {
+    wchar_t dir[MAX_PATH] = {};
+    GetSystemDirectoryW(dir, MAX_PATH);
+    return std::wstring(dir) + L"\\" + rel;
+}
 bool AutostartInstalled() {
-    return RunHidden(L"C:\\Windows\\System32\\schtasks.exe",
+    return RunHidden(SysDirExe(L"schtasks.exe"),
                      L"/Query /TN \"" + std::wstring(kTaskName) + L"\"") == 0;
 }
 bool AutostartSet(bool on) {
@@ -756,7 +766,7 @@ bool AutostartSet(bool on) {
                           L"\" /TR \"\\\"" + ExePath() +
                           L"\\\" /tray\" /SC ONLOGON /RL HIGHEST";
         DWORD code = 0;
-        RunHidden(L"C:\\Windows\\System32\\schtasks.exe", tr, &code);
+        RunHidden(SysDirExe(L"schtasks.exe"), tr, &code);
         Log(L"创建开机自启任务：%s (code %d)", code == 0 ? L"成功" : L"失败", (int)code);
         if (code == 0) {
             // 笔记本电源策略与执行时限：默认设置会因电池供电 / 3 天限制而停止托盘程序
@@ -765,12 +775,12 @@ bool AutostartSet(bool on) {
                 L"-AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable "
                 L"-ExecutionTimeLimit ([TimeSpan]::Zero) -MultipleInstances IgnoreNew; "
                 L"Set-ScheduledTask -TaskName 'MemSweep' -Settings $s | Out-Null\"";
-            RunHidden(L"C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe", ps);
+            RunHidden(SysDirExe(L"WindowsPowerShell\\v1.0\\powershell.exe"), ps);
         }
         return code == 0;
     }
     DWORD code = 0;
-    RunHidden(L"C:\\Windows\\System32\\schtasks.exe",
+    RunHidden(SysDirExe(L"schtasks.exe"),
               L"/Delete /F /TN \"" + std::wstring(kTaskName) + L"\"", &code);
     Log(L"移除开机自启任务：%s", code == 0 ? L"成功" : L"失败");
     return code == 0;
@@ -784,6 +794,7 @@ static DWORD WINAPI AutostartThread(LPVOID p) {
     return 0;
 }
 static void SetAutostartAsync(bool want) {
+    InterlockedIncrement(&g_autoEpoch);
     if (InterlockedCompareExchange(&g_autoBusy, 1, 0) != 0) {
         g_toast = Tx(L"正在设置开机自启…", L"Updating startup…");
         g_lastToastMs = GetTickCount64();
@@ -793,6 +804,19 @@ static void SetAutostartAsync(bool want) {
     HANDLE h = CreateThread(nullptr, 0, AutostartThread, (LPVOID)(intptr_t)(want ? 1 : 0), 0, nullptr);
     if (h) CloseHandle(h);
     else InterlockedExchange(&g_autoBusy, 0);
+}
+// 启动时核对计划任务：install.cmd 可能建了任务，而配置是默认的 false。
+// 只读查询也要起线程——schtasks 是进程调用，不能在 UI 线程等它。
+static DWORD WINAPI AutostartQueryThread(LPVOID) {
+    LONG epoch = g_autoEpoch;
+    bool installed = AutostartInstalled();
+    if (g_hwnd) PostMessageW(g_hwnd, WM_APP_AUTOSTATE, installed ? 1 : 0, (LPARAM)epoch);
+    return 0;
+}
+static void QueryAutostartAsync() {
+    if (g_autoBusy != 0) return;   // 用户正在改，别用旧状态覆盖
+    HANDLE h = CreateThread(nullptr, 0, AutostartQueryThread, nullptr, 0, nullptr);
+    if (h) CloseHandle(h);
 }
 
 // ---------------------------------------------------------------------------
@@ -837,20 +861,22 @@ static void SyncFromConfig() {
 // 热键的唯一注册入口：先注销，再注册新的；失败时回滚到旧组合。
 // 任何地方都不要直接调用 RegisterHotKey，否则失败后会留下“热键消失”的状态。
 static void KickAnim();
+static std::wstring EditText(HWND h);   // 定义在绘制区，配置提交先用
 static bool RegisterHotkeyRaw(const HotkeySpec& s) {
     return RegisterHotKey(g_hwnd, HOTKEY_ID, s.mods | MOD_NOREPEAT, s.vk) != FALSE;
 }
 static bool ApplyHotkey(const HotkeySpec& next, bool enable) {
+    // 保留组合必须在注销旧键之前拒绝：否则会留下“旧键已注销、新键没注册”的空窗，
+    // 而调用方拿到的 false 只说明没成功，旧键其实已经没了。
+    if (enable && IsReservedHotkey(next.mods, next.vk)) {
+        Log(L"热键 %s 属于保留组合，已忽略", next.ToString().c_str());
+        return false;
+    }
     const HotkeySpec prev = g_hkSpec;
     const bool hadPrev = g_hkValid;          // 只有真的注册成功过，才谈得上回滚
     UnregisterHotKey(g_hwnd, HOTKEY_ID);
     g_hkValid = false;
     if (!enable) return true;
-    // 最后一个关口：手改配置写进来的保留组合也不许注册（否则会抢掉系统习惯键）
-    if (IsReservedHotkey(next.mods, next.vk)) {
-        Log(L"热键 %s 属于保留组合，已忽略", next.ToString().c_str());
-        return false;
-    }
     if (RegisterHotkeyRaw(next)) {
         g_hkSpec = next;
         g_hkValid = true;
@@ -933,9 +959,7 @@ static void CommitSettings() {
         g_cfg.combinePages = (g_strength >= 2);
     }
 
-    wchar_t buf[512] = {};
-    if (g_edWL) GetWindowTextW(g_edWL, buf, 512);
-    std::wstring wl = buf;
+    std::wstring wl = EditText(g_edWL);
     if (wl.empty() && !g_wlDraft.empty()) wl = g_wlDraft;
     {
         std::vector<std::wstring> canon;
@@ -947,14 +971,14 @@ static void CommitSettings() {
         g_cfg.whitelist = JoinCSV(canon);
     }
     g_cfg.autostart = s_autostart;
-    SaveConfig();
+    bool saved = SaveConfig();
     RebuildWhitelist();
     if (g_hkValid) g_cfg.hotkeyCombo = g_hkSpec.ToString();
     if (s_hotkey != g_hkValid && !ApplyHotkey(g_hkSpec, s_hotkey)) {
         // 打开失败时开关回到真实状态，不让界面显示“已开启”却收不到热键
         s_hotkey = false;
         g_cfg.hotkey = false;
-        SaveConfig();
+        saved = SaveConfig();
         g_toast = Tx(L"热键被其他程序占用，已关闭", L"Hotkey is taken, turned off");
         g_lastToastMs = GetTickCount64();
         KickAnim();
@@ -962,17 +986,34 @@ static void CommitSettings() {
     if (s_autostart != s_autostartInstalled) SetAutostartAsync(s_autostart);
     if (!g_cfg.ecoQoS) RevertBackgroundTaming();
     g_coolDirty = g_minDirty = g_idleDirty = g_strengthDirty = false;
-    g_savedAt = GetTickCount64();
-    Log(L"设置已自动保存");
+    if (saved) {
+        g_savedAt = GetTickCount64();
+    } else {
+        // 写盘失败（磁盘满、杀毒锁文件、只读的便携目录）时不能显示“已保存”
+        g_toast = Tx(L"设置未能保存，请检查磁盘空间或文件权限",
+                     L"Settings couldn't be saved; check disk space or file permissions");
+        g_lastToastMs = GetTickCount64();
+        KickAnim();
+    }
+    Log(saved ? L"设置已自动保存" : L"设置保存失败");
 }
 
 // 绘制：卡片与控件
 // ---------------------------------------------------------------------------
+// 读取编辑框全文：固定 512 缓冲会静默截断长名单，再原样写回配置。
+static std::wstring EditText(HWND h) {
+    if (!h) return L"";
+    int len = GetWindowTextLengthW(h);
+    if (len <= 0) return L"";
+    std::wstring s((size_t)len + 1, L'\0');
+    int got = GetWindowTextW(h, s.data(), len + 1);
+    s.resize(got > 0 ? (size_t)got : 0);
+    return s;
+}
 static std::wstring EditValue(HWND h, const wchar_t* fallback) {
     if (!h) return fallback;
-    wchar_t buf[512] = {};
-    GetWindowTextW(h, buf, 511);
-    return buf[0] ? std::wstring(buf) : std::wstring(fallback);
+    std::wstring s = EditText(h);
+    return s.empty() ? std::wstring(fallback) : s;
 }
 static void DrawEditBox(Graphics& g, const RectF& r, const std::wstring& value) {
     if (r.Width <= 0 || r.Height <= 0) return;
@@ -1133,8 +1174,9 @@ static void DrawSwitchRow(Graphics& g, const RectF& r, const wchar_t* zh, const 
     TextAt(g, Tx(zh, en), RectF(r.X, r.Y + (subZh ? 3 : 0), r.Width - 58, subZh ? 18 : r.Height),
            f12, T.text);
     if (subZh) {
+        // 副标题一律省略号收尾：翻译变长时截断成“…”，而不是把字劈成两半。
         TextAt(g, Tx(subZh, subEn ? subEn : subZh), RectF(r.X, r.Y + 21, r.Width - 58, 15),
-               f11, T.text3);
+               f11, T.text3, StringAlignmentNear, StringAlignmentCenter, true);
     }
     DrawSwitch(g, r, on, anim);
 }
@@ -1194,7 +1236,7 @@ static void DrawHome(Graphics& g) {
     const wchar_t* title = L"内存充足";
     const wchar_t* titleEn = L"Plenty of memory";
     const wchar_t* sub = L"无需清理";
-    const wchar_t* subEn = L"no cleaning needed";
+    const wchar_t* subEn = L"No cleaning needed";
     Color tc = T.accent;
     wchar_t doneSub[96] = {};
     const bool justCleaned = g_cleanDoneAt && GetTickCount64() - g_cleanDoneAt < 6000 && !cleaning;
@@ -1212,27 +1254,27 @@ static void DrawHome(Graphics& g) {
         tc = T.accent;
     } else if (tidying) {
         title = L"正在合并内存页"; titleEn = L"Merging pages";
-        sub = L"正在合并重复页面，请稍候"; subEn = L"merging duplicate pages, please wait";
+        sub = L"正在合并重复页面，请稍候"; subEn = L"Merging duplicate pages; this can take a minute";
         tc = T.accent;
     } else if (cleaning) {
         title = L"正在清理"; titleEn = L"Cleaning";
-        sub = L"前台与焦点进程不会被触碰"; subEn = L"foreground and focused apps stay untouched";
+        sub = L"前台与焦点进程不会被触碰"; subEn = L"The app you're using stays untouched";
         tc = T.accent;
     } else if (paused) {
         title = L"自动清理已暂停"; titleEn = L"Auto clean paused";
-        sub = L"在托盘菜单中恢复自动清理"; subEn = L"resume from the tray menu";
+        sub = L"在托盘菜单中恢复自动清理"; subEn = L"Resume from the tray menu";
         tc = T.warn;
     } else if (g_gameMode.load(std::memory_order_relaxed)) {
         title = L"全屏/演示模式"; titleEn = L"Fullscreen / presenting";
-        sub = L"自动清理已暂停，不打扰当前应用"; subEn = L"auto clean paused to protect the foreground";
+        sub = L"自动清理已暂停，不打扰当前应用"; subEn = L"Auto clean paused to protect the foreground";
         tc = T.text2;
     } else if (m.loadPct >= 90) {
         title = L"内存紧张"; titleEn = L"Memory is tight";
-        sub = L"建议立即清理后台进程"; subEn = L"clean background apps now";
+        sub = L"建议立即清理后台进程"; subEn = L"Clean background apps now";
         tc = T.danger;
     } else if (m.loadPct >= 80) {
         title = L"内存偏高"; titleEn = L"Memory is high";
-        sub = L"建议清理后台进程"; subEn = L"clean background apps";
+        sub = L"建议清理后台进程"; subEn = L"Clean background apps";
         tc = T.warn;
     }
     TextAt(g, Tx(title, titleEn), L.statusTitle, f20b, tc);
@@ -1356,9 +1398,9 @@ static void DrawHome(Graphics& g) {
            L.autoRow.Width - 58, 19), f12, T.text);
     {
         wchar_t sub2[64];
-        swprintf(sub2, 64, s_auto ? Tx(L"已开启 · 高于 %d%% 时清理可回收的后台内存",
-                                       L"on · reclaims idle background above %d%%")
-                                  : Tx(L"已关闭", L"off"), s_threshold);
+        swprintf(sub2, 64, s_auto ? Tx(L"已开启 · 高于 %d%% 时清理闲置后台应用",
+                                       L"On · frees idle background apps above %d%%")
+                                  : Tx(L"已关闭 · 不自动清理", L"Off · no automatic cleaning"), s_threshold);
         TextAt(g, sub2, RectF(L.autoRow.X, L.autoRow.Y + 20, L.autoRow.Width - 58, 15), f11, T.text3);
     }
     DrawSwitch(g, L.autoRow, s_auto, ToggleValue(ID_TG_AUTO, s_auto));
@@ -1419,7 +1461,11 @@ static void DrawHome(Graphics& g) {
         if (!mm) {
             sysDesc = Tx(L"点击查看状态", L"Click to inspect");
         } else if (!mc || !sm || !pc) {
-            sysDesc = Tx(L"建议优化 1 项", L"1 recommendation");
+            const int n = (mc ? 0 : 1) + (sm ? 0 : 1) + (pc ? 0 : 1);
+            wchar_t sd[64] = {};
+            swprintf(sd, 64, n == 1 ? Tx(L"建议优化 %d 项", L"%d recommendation")
+                                    : Tx(L"建议优化 %d 项", L"%d recommendations"), n);
+            sysDesc = sd;
             sysColor = T.warn;
         } else {
             sysDesc = Tx(L"状态良好 · 压缩开启", L"Healthy · compression on");
@@ -1446,7 +1492,7 @@ static void DrawSheetFrame(Graphics& g, const wchar_t* titleZh, const wchar_t* t
     }
     if ((g_sheet == Sheet::Settings || g_sheet == Sheet::Advanced) &&
         g_savedAt && GetTickCount64() - g_savedAt < 1400) {
-        TextAt(g, Tx(L"已保存", L"saved"), RectF(L.sheet.GetRight() - 130, L.sheet.Y + 16, 74, 18),
+        TextAt(g, Tx(L"已保存", L"Saved"), RectF(L.sheet.GetRight() - 130, L.sheet.Y + 16, 74, 18),
                f11, T.accent, StringAlignmentFar);
     }
     DrawIconButton(g, L.sheetClose, ID_SHEET_CLOSE, true, false);
@@ -1507,10 +1553,15 @@ static void CommitWhitelist(std::vector<std::wstring> v) {
     const std::wstring joined = JoinCSV(v);
     g_cfg.whitelist = joined;
     g_wlDraft = joined;
-    SaveConfig();
+    bool saved = SaveConfig();
     RebuildWhitelist();
     if (g_edWL) SetWindowTextW(g_edWL, joined.c_str());
-    g_savedAt = GetTickCount64();
+    if (saved) g_savedAt = GetTickCount64();
+    else {
+        g_toast = Tx(L"设置未能保存，请检查磁盘空间或文件权限",
+                     L"Settings couldn't be saved; check disk space or file permissions");
+        g_lastToastMs = GetTickCount64();
+    }
     InvalidateRect(g_hwnd, nullptr, FALSE);
 }
 
@@ -1556,7 +1607,7 @@ static void DrawProcessSheet(Graphics& g) {
             TextAt(g, FormatBytes(r.ws), RectF(box.GetRight() - 142, box.Y, 96, box.Height),
                    f11, T.text3, StringAlignmentFar);
         else
-            TextAt(g, Tx(L"未运行", L"not running"), RectF(box.GetRight() - 152, box.Y, 106, box.Height),
+            TextAt(g, Tx(L"未运行", L"Not running"), RectF(box.GetRight() - 152, box.Y, 106, box.Height),
                    f11, T.text3, StringAlignmentFar);
 
         float cx = box.GetRight() - 26, cy = box.Y + box.Height / 2;
@@ -1592,9 +1643,17 @@ static void DrawProcessSheet(Graphics& g) {
 
 static void DrawSettingsSheet(Graphics& g) {
     DrawSheetFrame(g, L"设置", L"Settings", false);
+    wchar_t autoSubZh[80] = {}, autoSubEn[80] = {};
+    const wchar_t* autoSubZ = L"已关闭 · 不自动清理";
+    const wchar_t* autoSubE = L"Off · no automatic cleaning";
+    if (s_auto) {
+        swprintf(autoSubZh, 80, L"已开启 · 高于 %d%% 时清理闲置后台应用", (int)g_sliderValue);
+        swprintf(autoSubEn, 80, L"On · frees idle background apps above %d%%", (int)g_sliderValue);
+        autoSubZ = autoSubZh;
+        autoSubE = autoSubEn;
+    }
     DrawSwitchRow(g, L.setAutoRow, L"自动清理", L"Auto clean", s_auto,
-                  ToggleValue(ID_TG_AUTO, s_auto),
-                  s_auto ? L"已开启" : L"已关闭", s_auto ? L"on" : L"off");
+                  ToggleValue(ID_TG_AUTO, s_auto), autoSubZ, autoSubE);
 
     TextAt(g, Tx(L"内存高于", L"Clean above"), L.setThreshLbl, f12, T.text2);
     DrawSliderBar(g, L.setThresh, g_sliderValue);
@@ -1613,10 +1672,10 @@ static void DrawSettingsSheet(Graphics& g) {
     DrawSeg(g, L.setStrengthSeg, strZh, strEn, 3, g_strength);
     const wchar_t* hintZh = g_strength == 0 ? L"只清理空闲后台，切回应用不受影响"
                           : g_strength == 1 ? L"推荐：释放与流畅兼顾"
-                                            : L"释放更多，应用切回可能稍慢";
+                                            : L"释放更多并合并内存页，应用切回会稍慢";
     const wchar_t* hintEn = g_strength == 0 ? L"Only idle apps · switching back is unaffected"
                           : g_strength == 1 ? L"Recommended · balanced"
-                                            : L"Frees more · apps may reload slower";
+                                            : L"Frees more and merges pages; apps reload slower";
     TextAt(g, Tx(hintZh, hintEn), L.setStrengthHint, f11, T.text3);
 
     TextAt(g, Tx(L"保护名单", L"Protected list"), L.setWlLbl, f12, T.text2);
@@ -1632,8 +1691,8 @@ static void DrawSettingsSheet(Graphics& g) {
                   ToggleValue(ID_TG_AUTOSTART, s_autostart));
     DrawSwitchRow(g, L.setSilentRow, L"静默模式", L"Silent mode", s_silent,
                   ToggleValue(ID_TG_SILENT, s_silent),
-                  s_silent ? Tx(L"已开启 · 不弹完成通知", L"on · no notifications")
-                           : Tx(L"已关闭 · 清理完成后通知", L"off · notify when a clean finishes"));
+                  s_silent ? Tx(L"已开启 · 不弹完成通知", L"On · no notifications")
+                           : Tx(L"已关闭 · 清理完成后通知", L"Off · notify when a clean finishes"));
 
     bool aboutHover = g_hover == ID_SET_ABOUT;
     FillRound(g, L.setAboutLink, 8, aboutHover ? T.trackFill : C(0, 0, 0, 0));
@@ -1678,8 +1737,8 @@ static void DrawAdvancedHotkeyRow(Graphics& g) {
 
     DrawSwitch(g, row, s_hotkey, ToggleValue(ID_TG_HOTKEY, s_hotkey));
 
-    const wchar_t* subZh = L"点击组合键可修改";
-    const wchar_t* subEn = L"Click the keys to change";
+    const wchar_t* subZh = L"点击后按下新组合键";
+    const wchar_t* subEn = L"Click, then press the new keys";
     Color subColor = T.text3;
     switch (g_hkErr) {
     case 1: subZh = L"需要包含 Ctrl、Alt、Shift 或 Win"; subEn = L"Add Ctrl, Alt, Shift or Win"; subColor = T.danger; break;
@@ -1694,7 +1753,7 @@ static void DrawAdvancedHotkeyRow(Graphics& g) {
 
 static void DrawAdvancedSheet(Graphics& g) {
     DrawSheetFrame(g, L"高级设置", L"Advanced", true);
-    TextAt(g, Tx(L"只清理大于", L"Min working set"), L.advMinLbl, f12, T.text2);
+    TextAt(g, Tx(L"只清理占用大于", L"Only clean apps over"), L.advMinLbl, f12, T.text2);
     const wchar_t* mwZh[3] = { L"64 MB", L"128 MB", L"256 MB" };
     const wchar_t* mwEn[3] = { L"64 MB", L"128 MB", L"256 MB" };
     DrawSeg(g, L.advMinSeg, mwZh, mwEn, 3, g_minWSSel);
@@ -1705,16 +1764,16 @@ static void DrawAdvancedSheet(Graphics& g) {
     DrawAdvancedHotkeyRow(g);
     DrawSwitchRow(g, L.advEcoRow, L"后台效率模式", L"Efficiency mode", s_eco,
                   ToggleValue(ID_TG_ECO, s_eco),
-                  Tx(L"清理时给闲置后台进程打上效率标记（EcoQoS），系统调度和内存回收先照顾前台",
-                     L"Cleans tag idle background processes with EcoQoS, so scheduling and reclaim favor the foreground"));
+                  Tx(L"闲置后台应用降到低优先级，正在用的程序优先",
+                     L"Idle apps run at lower priority than what you use"));
     wchar_t idleSubZh[128] = {}, idleSubEn[128] = {};
     if (g_cfg.idleDeepSecs >= 60) {
         int m = g_cfg.idleDeepSecs / 60;
         swprintf(idleSubZh, 128, L"空闲 %d 分钟后自动清理并合并内存页，返回即中止", m);
-        swprintf(idleSubEn, 128, L"auto clean when idle %dm; stops when you're back", m);
+        swprintf(idleSubEn, 128, L"Cleans and merges pages after %dm idle; stops when you're back", m);
     } else {
         swprintf(idleSubZh, 128, L"空闲 %d 秒后自动清理并合并内存页，返回即中止", g_cfg.idleDeepSecs);
-        swprintf(idleSubEn, 128, L"auto clean when idle %ds; stops when you're back", g_cfg.idleDeepSecs);
+        swprintf(idleSubEn, 128, L"Cleans and merges pages after %ds idle; stops when you're back", g_cfg.idleDeepSecs);
     }
     DrawSwitchRow(g, L.advIdleDeepRow, L"离开时自动清理", L"Clean when away", s_idleDeep,
                   ToggleValue(ID_TG_IDLE_DEEP, s_idleDeep), idleSubZh, idleSubEn);
@@ -1736,12 +1795,12 @@ static void DrawAboutSheet(Graphics& g) {
     wchar_t ver[64];
     swprintf(ver, 64, L"v%s · %s", MEMSWEEP_VERSION, arch);
     TextAt(g, ver, L.aboutVer, f11, T.text3, StringAlignmentCenter);
-    TextAt(g, Tx(L"轻量、克制的 Windows 内存清理工具",
-                 L"A lightweight, restrained Windows memory cleaner"),
+    TextAt(g, Tx(L"常驻托盘、占用很小的 Windows 内存清理工具",
+                 L"A small Windows memory cleaner that stays in the tray"),
            L.aboutDesc, f12, T.text2, StringAlignmentCenter);
 
-    const wchar_t* rowZh[3] = { L"GitHub 仓库", L"问题反馈", L"检查更新" };
-    const wchar_t* rowEn[3] = { L"GitHub repository", L"Report an issue", L"Check for updates" };
+    const wchar_t* rowZh[3] = { L"GitHub 仓库", L"问题反馈", L"最新版本" };
+    const wchar_t* rowEn[3] = { L"GitHub repository", L"Report an issue", L"Latest release" };
     for (int i = 0; i < 3; i++) {
         bool hv = g_hover == (int)(ID_ABOUT_REPO + i);
         if (hv) FillRound(g, L.aboutRows[i], 8, T.trackFill);
@@ -1921,17 +1980,8 @@ static LRESULT CALLBACK EditProc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
         if (lp) g_wlDraft = (const wchar_t*)lp;
         return r;
     }
-    if (h == g_edWL && (msg == WM_CHAR || msg == WM_KEYDOWN || msg == WM_PASTE || msg == WM_CUT || msg == WM_CLEAR || msg == WM_UNDO)) {
-        LRESULT r = CallWindowProcW(g_edOldProc, h, msg, wp, lp);
-        int len = GetWindowTextLengthW(h);
-        if (len <= 0) g_wlDraft.clear();
-        else {
-            wchar_t b[512] = {};
-            GetWindowTextW(h, b, 512);
-            if (b[0]) g_wlDraft = b;
-        }
-        return r;
-    }
+    // Enter / Esc 必须先处理：下面的草稿同步会吞掉所有按键并提前 return，
+    // 之前放在后面的分支永远走不到，回车只会让单行编辑框响一声。
     if (msg == WM_KEYDOWN && wp == VK_RETURN) {
         CommitSettings();
         SetFocus(g_hwnd);
@@ -1944,6 +1994,11 @@ static LRESULT CALLBACK EditProc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
         return 0;
     }
     if (msg == WM_CHAR && (wp == VK_RETURN || wp == 27)) return 0;
+    if (h == g_edWL && (msg == WM_CHAR || msg == WM_KEYDOWN || msg == WM_PASTE || msg == WM_CUT || msg == WM_CLEAR || msg == WM_UNDO)) {
+        LRESULT r = CallWindowProcW(g_edOldProc, h, msg, wp, lp);
+        g_wlDraft = EditText(h);
+        return r;
+    }
     if (msg == WM_KILLFOCUS) CommitSettings();
     return CallWindowProcW(g_edOldProc, h, msg, wp, lp);
 }
@@ -2187,10 +2242,10 @@ static void Activate(CtlId id) {
         bool want = !s_autostart;
         s_autostart = want;
         g_cfg.autostart = want;
-        SaveConfig();
+        bool saved = SaveConfig();
         ToggleAnimStart(ID_TG_AUTOSTART);
         SetAutostartAsync(want);
-        g_savedAt = GetTickCount64();
+        if (saved) g_savedAt = GetTickCount64();
         break;
     }
     default: break;
@@ -2212,13 +2267,13 @@ static DWORD WINAPI CombineThread(LPVOID) {
     if (availShown > shown) shown = availShown;
     wchar_t msg[320];
     if (r.ok && r.aborted)
-        swprintf(msg, 320, Tx(L"深度清理已中止，已释放约 %s（用时 %.0f 秒）",
-                              L"Deep clean stopped, freed about %s (%.0f s)"),
-                 FormatBytes(shown).c_str(), (double)r.durationMs / 1000.0);
+        swprintf(msg, 320, Tx(L"深度清理已中止，已释放约 %s",
+                              L"Deep clean stopped, freed about %s"),
+                 FormatBytes(shown).c_str());
     else if (r.ok)
-        swprintf(msg, 320, Tx(L"深度清理完成，已释放约 %s（用时 %.0f 秒）",
-                              L"Deep clean done, freed about %s (%.0f s)"),
-                 FormatBytes(shown).c_str(), (double)r.durationMs / 1000.0);
+        swprintf(msg, 320, Tx(L"深度清理完成，已释放约 %s",
+                              L"Deep clean done, freed about %s"),
+                 FormatBytes(shown).c_str());
     else
         swprintf(msg, 320, Tx(L"深度清理未能执行，详见日志",
                               L"Deep clean failed; see log"));
@@ -2229,7 +2284,7 @@ static DWORD WINAPI CombineThread(LPVOID) {
         g_lastCleanWasAuto.store(false, std::memory_order_relaxed);   // 手动触发的深度清理
     }
     InterlockedExchange(&g_cleanPhase, 0);
-    if (g_hwnd && !g_cfg.silent) {   // 静默模式下深度清理也不发声
+    if (g_hwnd && !GetConfigSnapshot().silent) {   // 静默模式下深度清理也不发声
         PostMessageW(g_hwnd, WM_APP_BALLOON, 1, (LPARAM)new std::wstring(msg));
     }
     if (g_hwnd) {
@@ -2260,11 +2315,15 @@ static void StartCombine(bool needConfirm) {
 }
 static void ShowProcMenu(int row) {
     if (row < 0 || row >= (int)g_procList.size()) return;
-    const ProcRow& r = g_procList[row];
-    const bool can = (r.pid != 0 && r.st == ProcState::Normal);
+    // TrackPopupMenu 会跑自己的消息循环，期间每次重绘都会 BuildProcessRows() 重建
+    // g_procList —— 引用会悬空，甚至修剪到别的 PID。先把要用的字段拷出来。
+    const DWORD pid = g_procList[row].pid;
+    const std::wstring display = g_procList[row].display;
+    const unsigned long long ws = g_procList[row].ws;
+    const bool can = (pid != 0 && g_procList[row].st == ProcState::Normal);
     wchar_t trimLabel[160];
     swprintf(trimLabel, 160, Tx(L"释放此进程内存（%s）", L"Free this app's memory (%s)"),
-             FormatBytes(r.ws).c_str());
+             FormatBytes(ws).c_str());
     HMENU m = CreatePopupMenu();
     AppendMenuW(m, MF_STRING | (can ? 0 : MF_GRAYED), 1, trimLabel);
     AppendMenuW(m, MF_SEPARATOR, 0, nullptr);
@@ -2276,9 +2335,9 @@ static void ShowProcMenu(int row) {
     DestroyMenu(m);
     PostMessageW(g_hwnd, WM_NULL, 0, 0);
     if (cmd == 1) {
-        bool ok = TrimPid(r.pid);
-        g_toast = ok ? (Tx(L"已释放 ", L"Freed ") + r.display + L" · " + FormatBytes(r.ws))
-                     : (Tx(L"释放失败：", L"Couldn't free: ") + r.display);
+        bool ok = TrimPid(pid);
+        g_toast = ok ? (Tx(L"已释放 ", L"Freed ") + display + L" · " + FormatBytes(ws))
+                     : (Tx(L"释放失败：", L"Couldn't free: ") + display);
         g_lastToastMs = GetTickCount64();
         KickAnim();
     }
@@ -2348,6 +2407,7 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             return h;
         };
         g_edWL = mkEdit(0);
+        SendMessageW(g_edWL, EM_SETLIMITTEXT, 8191, 0);   // 名单很长时不静默截断
         UpdateWhitelistCue();
         g_edOldProc = (WNDPROC)SetWindowLongPtrW(g_edWL, GWLP_WNDPROC, (LONG_PTR)EditProc);
 
@@ -2366,13 +2426,7 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     }
     case WM_COMMAND: {
         if (HIWORD(wp) == EN_CHANGE && (HWND)lp == g_edWL) {
-            int len = GetWindowTextLengthW(g_edWL);
-            if (len <= 0) g_wlDraft.clear();
-            else {
-                wchar_t b[512] = {};
-                GetWindowTextW(g_edWL, b, 512);
-                if (b[0]) g_wlDraft = b;
-            }
+            g_wlDraft = EditText(g_edWL);
             InvalidateRect(hwnd, nullptr, FALSE);
         }
         return 0;
@@ -2458,6 +2512,13 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             if (e) SendMessageW(e, WM_SETFONT, (WPARAM)g_edFont, TRUE);
         PositionEdits();
         InvalidateRect(hwnd, nullptr, FALSE);
+        return 0;
+    }
+    case WM_SETTINGCHANGE: {
+        // 跟随系统主题时，Windows 切换深浅色会广播 ImmersiveColorSet；
+        // 用户显式选了浅色/深色则保持不动。
+        if (g_themeMode == 0 && lp && wcsncmp((const wchar_t*)lp, L"ImmersiveColor", 14) == 0)
+            ApplyTheme();
         return 0;
     }
     case WM_MOUSEWHEEL:
@@ -2606,6 +2667,19 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     case WM_APP_SYSINFO:
         if (g_sheet == Sheet::System) InvalidateRect(hwnd, nullptr, FALSE);
         return 0;
+    case WM_APP_AUTOSTATE: {
+        // 启动核对：以计划任务的真实状态为准；与配置不一致时写回，避免下次启动又闪回。
+        if ((LONG)lp != g_autoEpoch) return 0;   // 查询期间用户改过，结果已过期
+        bool installed = wp != 0;
+        s_autostart = installed;
+        s_autostartInstalled = installed;
+        if (g_cfg.autostart != installed) {
+            g_cfg.autostart = installed;
+            SaveConfig();
+        }
+        if (g_hwnd) InvalidateRect(g_hwnd, nullptr, FALSE);
+        return 0;
+    }
     case WM_APP_AUTOSTART: {
         bool ok = wp != 0, want = lp != 0;
         if (ok) {
@@ -2811,9 +2885,19 @@ static std::wstring ReadTextFileW(const std::wstring& path) {
     if (l) MultiByteToWideChar(CP_UTF8, 0, raw.data(), (int)raw.size(), w.data(), l);
     return w;
 }
+static bool IsUtf16File(const std::wstring& path) {
+    HANDLE h = CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr,
+                           OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (h == INVALID_HANDLE_VALUE) return false;
+    unsigned char b[2] = {};
+    DWORD rd = 0;
+    ReadFile(h, b, 2, &rd, nullptr);
+    CloseHandle(h);
+    return rd == 2 && ((b[0] == 0xFF && b[1] == 0xFE) || (b[0] == 0xFE && b[1] == 0xFF));
+}
 static void RunPS(const std::wstring& cmd) {
     std::wstring args = L"-NoProfile -ExecutionPolicy Bypass -Command \"" + cmd + L"\"";
-    RunHidden(L"C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe", args);
+    RunHidden(SysDirExe(L"WindowsPowerShell\\v1.0\\powershell.exe"), args);
 }
 static bool GetRegStr(const wchar_t* sub, const wchar_t* name, std::wstring& out) {
     wchar_t buf[1024] = {};
@@ -2859,27 +2943,49 @@ static void QuerySysInfo(bool deep) {
         DWORD hb = 0;
         n.fastStartupOn = GetRegDword(L"SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Power",
                                      L"HiberbootEnabled", hb) && hb != 0;
-        // 页面文件设置
+        // 页面文件设置：第一项可能是 "C:\pagefile.sys 4096 8192"、系统管理的
+        // "C:\pagefile.sys 0 0"，或 "?:\pagefile.sys"。从末尾取两个数字，路径带空格也不会截错。
         std::wstring pf;
         if (GetRegStr(L"SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Memory Management",
                       L"PagingFiles", pf)) {
             n.pagingFiles = pf;
-            int a = 0, b = 0;
-            wchar_t path[512] = {};
-            if (swscanf(pf.c_str(), L"%511[^ ] %d %d", path, &a, &b) >= 1) {
-                n.pfPath = path;
-                n.pfInitMB = a;
-                n.pfMaxMB = b;
+            std::vector<std::wstring> tok;
+            std::wstring cur;
+            for (wchar_t ch : pf) {
+                if (ch == 0) break;
+                if (ch == L' ' || ch == L'\t') {
+                    if (!cur.empty()) { tok.push_back(cur); cur.clear(); }
+                } else cur.push_back(ch);
+            }
+            if (!cur.empty()) tok.push_back(cur);
+            auto digits = [](const std::wstring& s) {
+                return !s.empty() && s.find_first_not_of(L"0123456789") == std::wstring::npos;
+            };
+            if (tok.size() >= 3 && digits(tok[tok.size() - 1]) && digits(tok[tok.size() - 2])) {
+                n.pfInitMB = _wtoi(tok[tok.size() - 2].c_str());
+                n.pfMaxMB = _wtoi(tok[tok.size() - 1].c_str());
+                tok.resize(tok.size() - 2);
+            }
+            n.pfPath.clear();
+            for (size_t i = 0; i < tok.size(); i++) {
+                if (i) n.pfPath += L' ';
+                n.pfPath += tok[i];
             }
         }
         // MMAgent / WSL / PageFileUsage → PowerShell 写入临时文件
         std::wstring outFile = ConfigDir() + L"\\sysinfo.txt";
         DeleteFileW(outFile.c_str());
+        // 单引号字符串里 '' 才是一个 '；用户名里带撇号时不能把命令截断
+        std::wstring outPs;
+        for (wchar_t ch : outFile) {
+            if (ch == L'\'') outPs += L"''";
+            else outPs += ch;
+        }
         std::wstring script =
             L"& { $m=Get-MMAgent; 'MC='+$m.MemoryCompression; 'PC='+$m.PageCombining; "
             L"'PL='+$m.ApplicationPreLaunch; $u=Get-CimInstance Win32_PageFileUsage; "
             L"if($u){'PFALLOC='+$u.AllocatedBaseSize; 'PFUSE='+$u.CurrentUsage; 'PFPEAK='+$u.PeakUsage} "
-            L"} | Out-File -Encoding utf8 '" + outFile + L"'";
+            L"} | Out-File -Encoding utf8 '" + outPs + L"'";
         RunPS(script);
         std::wstring txt = ReadTextFileW(outFile);
         auto has = [&](const wchar_t* k, const wchar_t* v) {
@@ -2936,7 +3042,7 @@ static void QuerySysInfo(bool deep) {
     }
 }
 
-static std::wstring OnOff(bool v) { return v ? Tx(L"已开启", L"on") : Tx(L"已关闭", L"off"); }
+static std::wstring OnOff(bool v) { return v ? Tx(L"已开启", L"On") : Tx(L"已关闭", L"Off"); }
 
 static void DrawActionButton(Graphics& g, const RectF& r, const std::wstring& text,
                              bool enabled, bool primary, int id) {
@@ -2971,28 +3077,38 @@ static void DrawSystemSheet(Graphics& g) {
     if (know && !g_sys.pageCombining) warnings++;
     if (!g_sys.sysmainRunning) warnings++;
     // 页面文件告警与机器内存相关，不再硬编码作者机器的 24–64 GB：
-    // 只在“没有页面文件”或“提交压力大且页面文件不足 8 GB”时提醒
-    bool pfTooSmall = g_sys.pfInitMB > 0 && g_sys.pfMaxMB > 0 && g_sys.pfMaxMB < 8192 && g_sys.commitPct > 90.0;
-    bool pfMissing = g_sys.pfInitMB <= 0 && g_sys.pfMaxMB <= 0;
+    // 只在“没有页面文件”或“提交压力大且自定义上限不足 8 GB”时提醒。
+    // “系统管理”（0 0 / ?:\pagefile.sys）是正常配置，不能报缺失。
+    const bool pfSystemManaged = !g_sys.pfPath.empty() && g_sys.pfInitMB <= 0 && g_sys.pfMaxMB <= 0;
+    const bool pfMissing = g_sys.pfPath.empty() && g_sys.pfAllocMB == 0;
+    const bool pfTooSmall = !pfSystemManaged && g_sys.pfMaxMB > 0 && g_sys.pfMaxMB < 8192 &&
+                            g_sys.commitPct > 90.0;
     if (pfMissing || pfTooSmall) warnings++;
     if (g_sys.commitPct > 90.0) warnings++;
     if (g_sys.nonpaged > 1024ULL * MB) warnings++;
 
     std::wstring summary;
     Color sc = T.accent;
-    if (g_sysLoading) { summary = Tx(L"正在读取系统状态…", L"reading system state…"); sc = T.text3; }
-    else if (!know) { summary = Tx(L"需要管理员权限才能读取系统机制", L"admin rights required to read system mechanisms"); sc = T.warn; }
+    if (g_sysLoading) { summary = Tx(L"正在读取系统状态…", L"Reading system status…"); sc = T.text3; }
+    else if (!know) { summary = Tx(L"需要管理员权限才能读取系统机制", L"Run as administrator to see system status"); sc = T.warn; }
     else if (warnings == 0) { summary = Tx(L"系统机制正常", L"System mechanisms look healthy"); }
-    else { wchar_t b[96]; swprintf(b, 96, Tx(L"%d 项需关注", L"%d items need attention"), warnings); summary = b; sc = T.warn; }
+    else {
+        wchar_t b[96];
+        if (warnings == 1)
+            swprintf(b, 96, Tx(L"%d 项需关注", L"%d item needs attention"), warnings);
+        else
+            swprintf(b, 96, Tx(L"%d 项需关注", L"%d items need attention"), warnings);
+        summary = b; sc = T.warn;
+    }
     TextAt(g, summary, RectF(L.sysSummary.X, L.sysSummary.Y, L.sysSummary.Width, 20), f15b, sc);
-    const wchar_t* summarySub = Tx(L"内存压缩 · 页面合并 · 已提交", L"compression · page merging · commit");
+    const wchar_t* summarySub = Tx(L"内存压缩 · 页面合并 · 已提交", L"Memory compression · page combining · commit charge");
     if (know && g_sys.commitPct > 90.0)
         summarySub = Tx(L"已提交接近上限，建议关闭大型应用",
-                        L"commit near limit; close heavy apps");
+                        L"Commit charge is near its limit. Close large apps.");
     else if (know && g_sys.nonpaged > 1024ULL * MB)
         summarySub = g_systemExpanded
-            ? Tx(L"内核内存偏高", L"kernel memory is high")
-            : Tx(L"内核内存偏高，展开查看明细", L"kernel memory is high; expand for details");
+            ? Tx(L"内核内存偏高", L"Kernel memory is high")
+            : Tx(L"内核内存偏高，展开查看明细", L"Kernel memory is high; show more for details");
     TextAt(g, summarySub, RectF(L.sysSummary.X, L.sysSummary.Y + 22, L.sysSummary.Width, 16), f11, T.text3);
 
     auto row = [&](int i, bool ok, const wchar_t* zh, const wchar_t* en, const std::wstring& v, bool warn) {
@@ -3000,56 +3116,63 @@ static void DrawSystemSheet(Graphics& g) {
     };
     wchar_t v[128];
     if (g_sys.compOk) {
-        swprintf(v, 128, Tx(L"已开启 · %s · %.2f×", L"on · %s · %.2fx"),
+        swprintf(v, 128, Tx(L"已开启 · %s · %.2f×", L"On · %s · %.2fx"),
                  FormatBytes(g_sys.compBytes).c_str(), g_sys.compRatio);
     } else {
-        wcscpy(v, g_sys.mmOk ? (g_sys.compression ? Tx(L"已开启", L"on") : Tx(L"已关闭", L"off"))
-                             : Tx(L"未知", L"unknown"));
+        wcscpy(v, g_sys.mmOk ? (g_sys.compression ? Tx(L"已开启", L"On") : Tx(L"已关闭", L"Off"))
+                             : Tx(L"未知", L"Unknown"));
     }
-    row(0, g_sys.mmOk && g_sys.compression, L"内存压缩", L"Compression", v, g_sys.mmOk && !g_sys.compression);
+    row(0, g_sys.mmOk && g_sys.compression, L"内存压缩", L"Memory compression", v, g_sys.mmOk && !g_sys.compression);
     row(1, g_sys.mmOk && g_sys.pageCombining, L"页面合并", L"Page combining",
-        g_sys.mmOk ? OnOff(g_sys.pageCombining) : Tx(L"未知", L"unknown"),
+        g_sys.mmOk ? OnOff(g_sys.pageCombining) : Tx(L"未知", L"Unknown"),
         g_sys.mmOk && !g_sys.pageCombining);
     row(2, g_sys.sysmainRunning, L"SysMain", L"SysMain",
-        g_sys.sysmainRunning ? Tx(L"运行中", L"running") : Tx(L"已停止", L"stopped"),
+        g_sys.sysmainRunning ? Tx(L"运行中", L"Running") : Tx(L"已停止", L"Stopped"),
         !g_sys.sysmainRunning);
-    swprintf(v, 128, Tx(L"%d–%d MB · 已分配 %llu MB", L"%d–%d MB · allocated %llu MB"),
-             g_sys.pfInitMB, g_sys.pfMaxMB, g_sys.pfAllocMB);
+    if (pfMissing)
+        swprintf(v, 128, Tx(L"未设置", L"Not set"));
+    else if (pfSystemManaged)
+        swprintf(v, 128, Tx(L"系统管理 · 已分配 %llu MB", L"System managed · %llu MB allocated"),
+                 g_sys.pfAllocMB);
+    else
+        swprintf(v, 128, Tx(L"%d–%d MB · 已分配 %llu MB", L"%d–%d MB · allocated %llu MB"),
+                 g_sys.pfInitMB, g_sys.pfMaxMB, g_sys.pfAllocMB);
     bool pfWarn = pfMissing || pfTooSmall;
-    row(3, !pfWarn, L"页面文件", L"Pagefile", v, pfWarn);
+    row(3, !pfWarn, L"页面文件", L"Page file", v, pfWarn);
     swprintf(v, 128, Tx(L"%s / %s · %.0f%%", L"%s / %s · %.0f%%"),
              FormatBytes(g_sys.commitUsed).c_str(), FormatBytes(g_sys.commitLimit).c_str(), g_sys.commitPct);
-    row(4, g_sys.commitPct <= 90.0, L"已提交", L"Commit", v, g_sys.commitPct > 90.0);
+    row(4, g_sys.commitPct <= 90.0, L"已提交", L"Commit charge", v, g_sys.commitPct > 90.0);
 
     if (g_systemExpanded) {
         row(5, g_sys.mmOk && g_sys.prelaunch, L"应用预加载", L"App prefetch", OnOff(g_sys.prelaunch), false);
         row(6, !g_sys.fastStartupOn, L"快速启动", L"Fast startup",
-            g_sys.fastStartupOn ? Tx(L"已开启", L"on") : Tx(L"已关闭", L"off"), g_sys.fastStartupOn);
+            g_sys.fastStartupOn ? Tx(L"已开启", L"On") : Tx(L"已关闭", L"Off"), g_sys.fastStartupOn);
         swprintf(v, 128, Tx(L"非分页 %s · 分页 %s", L"nonpaged %s · paged %s"),
                  FormatBytes(g_sys.nonpaged).c_str(), FormatBytes(g_sys.paged).c_str());
         row(7, g_sys.nonpaged <= 1024ULL * MB, L"内核内存", L"Kernel memory", v, g_sys.nonpaged > 1024ULL * MB);
         row(8, true, L"WSL 内存回收", L"WSL memory reclaim",
-            g_sys.wslEnabled ? Tx(L"可配置", L"configurable") : Tx(L"未启用", L"not enabled"), false);
+            g_sys.wslEnabled ? Tx(L"可用", L"Available") : Tx(L"未启用", L"Not enabled"), false);
     }
 
     TextAt(g, g_systemExpanded ? Tx(L"收起 ‹", L"Show less ‹") : Tx(L"更多状态 ›", L"Show more ›"),
            L.sysMore, f12, g_hover == ID_SYS_MORE ? T.accent : T.text2);
 
-    const bool canMc = g_sys.mmOk && !g_sys.compression;
-    const bool canPc = g_sys.mmOk && !g_sys.pageCombining;
-    const bool canPf = (g_sys.pfInitMB > 0 || g_sys.pfMaxMB > 0);   // 有页面文件才能调整
+    const bool sysAdminOk = g_sys.mmOk;
+    const bool canMc = sysAdminOk && !g_sys.compression;
+    const bool canPc = sysAdminOk && !g_sys.pageCombining;
+    const bool canPf = !pfMissing;   // 系统管理的页面文件也允许改成固定大小
     const bool canWsl = g_sys.wslEnabled;
     ReleaseSRWLockShared(&g_sysLock);
 
-    const wchar_t* mcLabel = !g_sys.mmOk ? Tx(L"需要管理员", L"Admin only")
-                           : canMc ? Tx(L"启用压缩", L"Compression")
-                                   : Tx(L"压缩已开启", L"Compression on");
-    const wchar_t* pcLabel = !g_sys.mmOk ? Tx(L"需要管理员", L"Admin only")
-                           : canPc ? Tx(L"启用合并", L"Combining")
-                                   : Tx(L"合并已开启", L"Combining on");
+    // 按钮只有 ~87px：只放名词短语，状态由上方行的值 + 按钮禁用态表达。
+    // 之前 "Compression on" 会超出按钮被裁掉首尾。
+    const wchar_t* mcLabel = !sysAdminOk ? Tx(L"需要管理员", L"Admin only")
+                                         : Tx(L"内存压缩", L"Compression");
+    const wchar_t* pcLabel = !sysAdminOk ? Tx(L"需要管理员", L"Admin only")
+                                         : Tx(L"页面合并", L"Combining");
     DrawActionButton(g, L.sysBtn[0], mcLabel, canMc, canMc, ID_SYS_MC);
     DrawActionButton(g, L.sysBtn[1], pcLabel, canPc, canPc, ID_SYS_PC);
-    DrawActionButton(g, L.sysBtn[2], Tx(L"页面文件", L"Pagefile"), canPf, canPf, ID_SYS_PF);
+    DrawActionButton(g, L.sysBtn[2], Tx(L"页面文件", L"Page file"), canPf, canPf, ID_SYS_PF);
     DrawActionButton(g, L.sysBtn[3], canWsl ? Tx(L"WSL 回收", L"WSL reclaim")
                                            : Tx(L"WSL 未启用", L"WSL off"),
                      canWsl, false, ID_SYS_WSL);
@@ -3159,7 +3282,7 @@ static void SysActionWorker(int id) {
             RunPS(L"Set-Service SysMain -StartupType Automatic; Start-Service SysMain; Enable-MMAgent -pc");
             Log(L"系统检查：确保 SysMain 自动启动，并启用页面合并");
         }
-    } else if (id == 3 && (st.pfInitMB > 0 || st.pfMaxMB > 0)) {
+    } else if (id == 3 && (!st.pfPath.empty() || st.pfAllocMB > 0)) {
         // 目标大小与这台机器的物理内存相关，不再硬编码 24–64 GB
         MEMORYSTATUSEX ms{};
         ms.dwLength = sizeof(ms);
@@ -3170,7 +3293,7 @@ static void SysActionWorker(int id) {
         if (maxMB < 16384) maxMB = 16384;
         wchar_t ask[256];
         swprintf(ask, 256, Tx(L"把页面文件调整为 %d–%d MB？\n\n对每一个已配置的页面文件生效，需要重启。",
-                              L"Set pagefile to %d–%d MB?\n\nApplies to every configured pagefile; reboot required."),
+                              L"Set page file to %d–%d MB?\n\nApplies to every configured page file; reboot required."),
                  initMB, maxMB);
         if (confirm(ask, ask)) {
             std::wstring ps = L"Get-CimInstance Win32_PageFileSetting | ForEach-Object { "
@@ -3180,50 +3303,74 @@ static void SysActionWorker(int id) {
             Log(L"系统检查：页面文件调整为 %d–%d MB（重启生效）", initMB, maxMB);
         }
     } else if (id == 4 && st.wslEnabled) {
-        if (confirm(L"为 WSL 写入 autoMemoryReclaim=gradual？", L"Set WSL autoMemoryReclaim=gradual?")) {
+        if (confirm(L"让 WSL 把未使用的内存交还 Windows？\n\n会修改 %USERPROFILE%\\.wslconfig。",
+                    L"Let WSL return unused memory to Windows?\n\nThis edits %USERPROFILE%\\.wslconfig.")) {
             wchar_t* up = _wgetenv(L"USERPROFILE");
             std::wstring path = std::wstring(up && *up ? up : L"C:\\") + L"\\.wslconfig";
-            std::wstring txt = ReadTextFileW(path);
-            std::vector<std::wstring> lines;
-            size_t pos = 0;
-            while (pos <= txt.size()) {
-                size_t e = txt.find(L'\n', pos);
-                if (e == std::wstring::npos) e = txt.size();
-                lines.push_back(txt.substr(pos, e - pos));
-                pos = e + 1;
-            }
-            bool inWsl2 = false, set = false, hasSection = false;
-            for (auto& line : lines) {
-                std::wstring t = TrimW(line);
-                if (t.size() > 2 && t[0] == L'[') {
-                    inWsl2 = (_wcsicmp(t.c_str(), L"[experimental]") == 0);
-                    if (inWsl2) hasSection = true;
-                } else if (inWsl2 && ToLower(t).rfind(L"automemoryreclaim", 0) == 0) {
-                    line = L"autoMemoryReclaim=gradual";
-                    set = true;
+            if (IsUtf16File(path)) {
+                g_toast = Tx(L".wslconfig 是 UTF-16 编码，请先另存为 UTF-8",
+                             L".wslconfig is UTF-16; save it as UTF-8 first");
+                g_lastToastMs = GetTickCount64();
+                Log(L"系统检查：.wslconfig 为 UTF-16，未改动");
+            } else {
+                std::wstring txt = ReadTextFileW(path);
+                std::vector<std::wstring> lines;
+                size_t pos = 0;
+                while (pos <= txt.size()) {
+                    size_t e = txt.find(L'\n', pos);
+                    if (e == std::wstring::npos) e = txt.size();
+                    std::wstring line = txt.substr(pos, e - pos);
+                    if (!line.empty() && line.back() == L'\r') line.pop_back();   // 不让 CR 叠加
+                    lines.push_back(std::move(line));
+                    pos = e + 1;
                 }
-            }
-            if (!hasSection) { lines.push_back(L"[experimental]"); lines.push_back(L"autoMemoryReclaim=gradual"); }
-            else if (!set) {
-                for (size_t i = 0; i < lines.size(); i++) {
-                    if (_wcsicmp(TrimW(lines[i]).c_str(), L"[experimental]") == 0) {
-                        lines.insert(lines.begin() + i + 1, L"autoMemoryReclaim=gradual");
-                        break;
+                if (!lines.empty() && lines.back().empty()) lines.pop_back();
+                bool inWsl2 = false, set = false, hasSection = false;
+                for (auto& line : lines) {
+                    std::wstring t = TrimW(line);
+                    if (t.size() > 2 && t[0] == L'[') {
+                        inWsl2 = (_wcsicmp(t.c_str(), L"[experimental]") == 0);
+                        if (inWsl2) hasSection = true;
+                    } else if (inWsl2 && ToLower(t).rfind(L"automemoryreclaim", 0) == 0) {
+                        line = L"autoMemoryReclaim=gradual";
+                        set = true;
                     }
                 }
-            }
-            std::wstring out;
-            for (auto& line : lines) { out += line; out += L"\r\n"; }
-            HANDLE h = CreateFileW(path.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS,
-                                   FILE_ATTRIBUTE_NORMAL, nullptr);
-            if (h != INVALID_HANDLE_VALUE) {
-                int l = WideCharToMultiByte(CP_UTF8, 0, out.c_str(), (int)out.size(), nullptr, 0, nullptr, nullptr);
-                std::string raw(l, 0);
-                WideCharToMultiByte(CP_UTF8, 0, out.c_str(), (int)out.size(), raw.data(), l, nullptr, nullptr);
-                DWORD wr = 0;
-                WriteFile(h, raw.data(), (DWORD)raw.size(), &wr, nullptr);
-                CloseHandle(h);
-                Log(L"系统检查：写入 .wslconfig autoMemoryReclaim=gradual");
+                if (!hasSection) { lines.push_back(L"[experimental]"); lines.push_back(L"autoMemoryReclaim=gradual"); }
+                else if (!set) {
+                    for (size_t i = 0; i < lines.size(); i++) {
+                        if (_wcsicmp(TrimW(lines[i]).c_str(), L"[experimental]") == 0) {
+                            lines.insert(lines.begin() + i + 1, L"autoMemoryReclaim=gradual");
+                            break;
+                        }
+                    }
+                }
+                std::wstring out;
+                for (auto& line : lines) { out += line; out += L"\r\n"; }
+                // 先写临时文件再替换：写入失败时原 .wslconfig 保持原样
+                std::wstring tmp = path + L".memsweep.tmp";
+                bool wrote = false;
+                HANDLE h = CreateFileW(tmp.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS,
+                                       FILE_ATTRIBUTE_NORMAL, nullptr);
+                if (h != INVALID_HANDLE_VALUE) {
+                    int l = WideCharToMultiByte(CP_UTF8, 0, out.c_str(), (int)out.size(), nullptr, 0, nullptr, nullptr);
+                    std::string raw(l, 0);
+                    WideCharToMultiByte(CP_UTF8, 0, out.c_str(), (int)out.size(), raw.data(), l, nullptr, nullptr);
+                    DWORD wr = 0;
+                    wrote = WriteFile(h, raw.data(), (DWORD)raw.size(), &wr, nullptr) && wr == (DWORD)raw.size();
+                    CloseHandle(h);
+                    if (wrote && !MoveFileExW(tmp.c_str(), path.c_str(), MOVEFILE_REPLACE_EXISTING))
+                        wrote = false;
+                }
+                if (wrote) {
+                    Log(L"系统检查：写入 .wslconfig autoMemoryReclaim=gradual");
+                } else {
+                    DeleteFileW(tmp.c_str());
+                    g_toast = Tx(L".wslconfig 写入失败，原文件未改动",
+                                 L"Couldn't write .wslconfig; the original file is unchanged");
+                    g_lastToastMs = GetTickCount64();
+                    Log(L"系统检查：.wslconfig 写入失败");
+                }
             }
         }
     } else if (id == 5) {
@@ -3572,17 +3719,16 @@ int RunUI(HINSTANCE hInst, bool showOnStart) {
         DwmSetWindowAttribute(hwnd, 34 /* DWMWA_BORDER_COLOR */, &borderNone, sizeof(borderNone));
     }
 
-    // 托盘
+    // 托盘：NIM_ADD、v4 声明与失败重试都由 TrayUpdate 负责，这里只准备回调参数。
+    // 曾经在这里先 NIM_ADD 再把 g_trayOn 置 true，一旦登录时外壳未就绪，
+    // 之后永远走 NIM_MODIFY，图标整个会话都补不回来。
     memset(&g_nid, 0, sizeof(g_nid));
     g_nid.cbSize = sizeof(g_nid);
     g_nid.hWnd = hwnd;
     g_nid.uID = 1;
     g_nid.uFlags = NIF_MESSAGE;
     g_nid.uCallbackMessage = WM_APP_TRAY;
-    Shell_NotifyIconW(NIM_ADD, &g_nid);
-    g_nid.uVersion = NOTIFYICON_VERSION_4;
-    Shell_NotifyIconW(NIM_SETVERSION, &g_nid);
-    g_trayOn = true;
+    g_trayOn = false;
     TrayUpdate(true);
 
     // 热键：先按配置，失败回落默认组合，再失败才关闭（并写回配置，避免每次启动重试）
@@ -3605,9 +3751,10 @@ int RunUI(HINSTANCE hInst, bool showOnStart) {
     bool firstRun = GetFileAttributesW(ConfigPath().c_str()) == INVALID_FILE_ATTRIBUTES;
     if (firstRun || showOnStart) {
         BringMainToFront();
-        std::wstring welcome = Tx(L"欢迎使用 MemSweep · 按 ", L"Welcome to MemSweep · ");
-        welcome += s_hotkey ? g_hkSpec.ToString() + Tx(L" 随时清理", L" cleans anytime")
-                            : std::wstring(Tx(L"Ctrl+Enter 随时清理", L"Ctrl+Enter cleans anytime"));
+        std::wstring welcome = Tx(L"欢迎使用 MemSweep · ", L"Welcome to MemSweep · ");
+        if (s_hotkey) welcome += g_hkSpec.ToString() + Tx(L" 随时清理", L" cleans anytime");
+        else welcome += Tx(L"热键已关闭，可在 设置 › 高级设置 中开启",
+                           L"hotkey is off; enable it in Settings › Advanced");
         g_toast = welcome;
         g_lastToastMs = GetTickCount64();
         if (firstRun) SaveConfig();
@@ -3616,6 +3763,7 @@ int RunUI(HINSTANCE hInst, bool showOnStart) {
     // 监控线程
     g_monThread = CreateThread(nullptr, 0, MonitorThreadProc, nullptr, 0, nullptr);
     MonitorTick();
+    QueryAutostartAsync();
 
     MSG msg;
     while (GetMessageW(&msg, nullptr, 0, 0) > 0) {

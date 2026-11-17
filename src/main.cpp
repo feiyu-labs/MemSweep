@@ -110,7 +110,13 @@ int APIENTRY wWinMain(HINSTANCE hInst, HINSTANCE, PWSTR, int) {
     }
     if (trimCmd) {
         EnsureConsole();
-        DWORD pid = (DWORD)_wtoi(trimArg.c_str());
+        wchar_t* end = nullptr;
+        unsigned long v = wcstoul(trimArg.c_str(), &end, 10);
+        if (!end || *end != 0 || v <= 4 || v > 0xFFFFFFFFul) {
+            ConPrint(L"Invalid PID: %s\n", trimArg.c_str());
+            return 1;
+        }
+        DWORD pid = (DWORD)v;
         bool ok = TrimPid(pid);
         ConPrint(L"trim pid=%u ok=%d\n", pid, (int)ok);
         return ok ? 0 : 1;
@@ -161,24 +167,18 @@ int APIENTRY wWinMain(HINSTANCE hInst, HINSTANCE, PWSTR, int) {
             return 2;
 #endif
         }
-        Snapshot s;
-        TakeSnapshot(s);
         Config cfg = GetConfigSnapshot();
-        size_t cand = CountTrimCandidates(s, false, 8, cfg);
         CleanPlan plan = PlanManual(cfg);
         CleanResult r;
         RunClean(plan, cfg, r);
         LogCleanResult(L"单次", (size_t)r.candidates, r);
-        ConPrint(L"MemSweep clean done: candidates %d, trimmed %d/%d, standby(low/full)=%d/%d, filecache=%d, combined=%d(%llu pages)\n",
-                 (int)cand, r.trimmed, r.attempted,
+        ConPrint(L"MemSweep: freed %s, %s available (%llu ms)\n",
+                 FormatBytes(r.freeGain > r.availGain ? r.freeGain : r.availGain).c_str(),
+                 FormatBytes(r.availAfter).c_str(), (unsigned long long)r.durationMs);
+        ConPrint(L"  trimmed %d/%d background apps, standby low/full %d/%d, file cache %d, combined %d (%llu pages)\n",
+                 r.trimmed, r.attempted,
                  (int)r.standbyLow, (int)r.standbyFull, (int)r.cache,
                  (int)r.combined, r.pagesCombined);
-        ConPrint(L"free %s -> %s (%llu MB gained), available %s -> %s (%llu MB gained), %llu ms\n",
-                 FormatBytes(r.freeBefore).c_str(), FormatBytes(r.freeAfter).c_str(),
-                 (unsigned long long)(r.freeGain / MB),
-                 FormatBytes(r.availBefore).c_str(), FormatBytes(r.availAfter).c_str(),
-                 (unsigned long long)(r.availGain / MB),
-                 (unsigned long long)r.durationMs);
         return 0;
     }
 
@@ -200,6 +200,13 @@ int APIENTRY wWinMain(HINSTANCE hInst, HINSTANCE, PWSTR, int) {
         return 0;
     }
     (void)wantShow;
+
+    if (wantExit) {
+        // 没有正在运行的实例时 /exit 只表示“确保已退出”，不能顺手把窗口开起来
+        ReleaseMutex(mtx);
+        CloseHandle(mtx);
+        return 0;
+    }
 
     if (!IsElevated()) {
 #ifdef MS_DEV

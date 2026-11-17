@@ -45,12 +45,18 @@ RenderSnap "" "dark"  "en" 1.5 "screenshot-home-dark-en.png"
 # 2. Sheets: Chinese
 RenderSnap "settings"  "light" "zh" 1.5 "screenshot-settings-zh.png"
 RenderSnap "processes" "light" "zh" 1.5 "screenshot-processes-zh.png"
-RenderSnap "system"    "light" "zh" 1.5 "screenshot-system-zh.png"
 
 # 3. Sheets: English
 RenderSnap "settings"  "light" "en" 1.5 "screenshot-settings-en.png"
 RenderSnap "processes" "light" "en" 1.5 "screenshot-processes-en.png"
-RenderSnap "system"    "light" "en" 1.5 "screenshot-system-en.png"
+
+# 系统状态页需要管理员权限才读得到真实状态；非提权渲染会显示
+# “Run as administrator to see system status”，不能作为文档配图。
+# 在提权 PowerShell 里设置同样四个环境变量后运行 /uipng，再把 ui.png 拷到 docs：
+#   $env:MEMSweep_SHEET='system'; $env:MEMSweep_THEME='light'
+#   $env:MEMSweep_LANG='en'; $env:MEMSweep_DPISCALE='1.5'
+#   Start-Process .\dist\MemSweepDev.exe -ArgumentList '/uipng' -WindowStyle Hidden -Wait
+#   中英文各一次，分别覆盖 screenshot-system-en.png / screenshot-system-zh.png
 
 # 4. Hotkey recording state (advanced sheet)
 $env:MEMSweep_CAPTURE = '1'

@@ -13,11 +13,16 @@
 </p>
 
 <p align="center">
+  <a href="https://github.com/feiyu-labs/MemSweep/releases/latest"><b>下载 Windows 版</b></a><br>
+  Windows 10 / 11 · x64 与 ARM64 · 413 KB
+</p>
+
+<p align="center">
   <a href="https://github.com/feiyu-labs/MemSweep/actions/workflows/ci.yml"><img src="https://github.com/feiyu-labs/MemSweep/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
   <a href="https://github.com/feiyu-labs/MemSweep/releases/latest"><img src="https://img.shields.io/github/v/release/feiyu-labs/MemSweep?color=emerald" alt="Release"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="License"></a>
-  <img src="https://img.shields.io/badge/platform-Windows%2010%20%7C%2011%20(x64%20%2C%20ARM64)-blue" alt="Platform">
-  <img src="https://img.shields.io/badge/binary-403%20KB-success" alt="Binary size">
+  <img src="https://img.shields.io/badge/platform-Windows%2010%20%7C%2011%20(x64%2C%20ARM64)-blue" alt="Platform">
+  <img src="https://img.shields.io/badge/binary-413%20KB-success" alt="Binary size">
   <img src="https://img.shields.io/badge/tray-3%20MB-success" alt="Tray memory">
   <img src="https://img.shields.io/badge/network-none-green" alt="No network access">
 </p>
@@ -25,8 +30,11 @@
 <p align="center">
   <a href="#安装">安装</a> ·
   <a href="#特性">特性</a> ·
+  <a href="#与同类工具的区别">与同类工具的区别</a> ·
   <a href="#命令行">命令行</a> ·
   <a href="#占用">占用</a> ·
+  <a href="#常见问题">常见问题</a> ·
+  <a href="#隐私">隐私</a> ·
   <a href="#从源码构建">构建</a> ·
   <a href="#规划">规划</a> ·
   <a href="CHANGELOG.md">更新日志</a>
@@ -45,25 +53,28 @@
 
 ## 这是什么
 
-MemSweep 回收闲置后台进程占用的内存，你正在用的程序不受影响。它只有一个 exe：不装驱动、不起服务、不联网，也不会改你没要求过的系统设置。
+MemSweep 回收闲置后台进程占用的内存，你正在用的程序不受影响。它只有一个 exe：不安装驱动，不运行服务，也不联网，不会改你没要求过的系统设置。
 
 做这个工具，是因为这类软件的常见失败方式太一致：刷写修改页把整台机器卡死的（Mem Reduct 的 issue、WinMemoryCleaner「五次优化三次卡死」的反馈），按固定间隔清理把外壳一起带崩的（CleanMem），以及把曲线拉低但下次加载更慢的「内存加速」。MemSweep 走的是另一条路：按真实压力决定，只动闲置的后台内存，并且把实际发生的事报告出来。
 
 | | |
 |:---|:---|
 | **平台** | Windows 10 / 11，x64 与 ARM64 各自原生构建 |
-| **体积** | 403 KB 单文件，无运行时依赖 |
+| **体积** | 413 KB 单文件，无运行时依赖 |
 | **占用** | 面板 9.5 MB · 托盘 3.0 MB |
+| **权限** | 清理需要管理员权限；安装脚本会注册登录任务，日常使用不再弹 UAC |
 | **许可** | MIT |
 
 ## 特性
 
-- **只清理闲置的后台进程。** 你正在用的窗口、它启动的进程、最近两分钟用过的程序，都不会被清理。后台进程要连续五分钟没怎么动 CPU，才会被考虑。
-- **内存紧张时才清理。** 已用超过你设的比例，并且可用低于 512 MB 或已用超过 95%，才开始清理。内存停在已缓存里是 Windows 的正常行为，不算紧张。
+- **自动清理只动闲置的后台应用。** 你正在用的应用、启动它的进程，以及最近两分钟用过的程序，都不会被清理。后台应用要连续五分钟没怎么用 CPU 才会被考虑（这个时长可调）。内存严重不足时，自动清理也会动忙碌的后台应用；手动清理不等空闲。
+- **内存紧张时才清理。** 已用超过你设的比例（默认 85%）、可用低于 512 MB、或已用超过 95%，任意一条成立就清理。内存停在已缓存里是 Windows 的正常行为，不算紧张。
 - **会导致卡死的操作，它不做。** 不刷写修改页、不清注册表缓存、不全局清空工作集、不改系统定时器、不结束进程。
 - **重复的内存页可以合并。** 内容完全相同的物理页合并成一份，手动触发，按下任意键立刻停止。
+- **离开电脑时也能清理。** 十分钟没有输入，并且内存占用或提交量较高时，清理闲置后台应用并合并重复内存页；你一回来就停止。
+- **它能显示 Windows 的内存机制。** 系统状态页面显示内存压缩、页面合并、SysMain、页面文件、提交量、内核内存和 WSL 内存回收，并可导出诊断文件。
 - **玩游戏和做演示时不打扰。** 全屏游戏、演示模式、专注助手打开时不弹通知。自动清理只在真的释放了内存时才告诉你。
-- **一个 403 KB 的 exe。** 不用装运行库，托盘常驻约 3 MB，深色浅色、中英文、热键都能自己调。
+- **一个 413 KB 的 exe。** 不用装运行库，托盘常驻约 3 MB，支持深色和浅色主题、中英文界面，热键也可以自己改（默认 Ctrl+Shift+M）。
 
 <table align="center">
   <tr>
@@ -86,13 +97,13 @@ MemSweep 回收闲置后台进程占用的内存，你正在用的程序不受�
 
 ## 安装
 
-从 [Releases](https://github.com/feiyu-labs/MemSweep/releases/latest) 下载 `MemSweep-v1.9.18-x64.zip` 或 `MemSweep-v1.9.18-arm64.zip`，解压后右键 `install.cmd`，选择**以管理员身份运行**。
+从 [Releases](https://github.com/feiyu-labs/MemSweep/releases/latest) 下载 `MemSweep-v1.9.19-x64.zip` 或 `MemSweep-v1.9.19-arm64.zip`，解压后右键 `install.cmd`，选择**以管理员身份运行**。
 
 脚本把 `MemSweep.exe` 复制到 `C:\Program Files\MemSweep\`，注册一个最高权限的登录任务（开机不弹 UAC），创建桌面快捷方式，并让 MemSweep 进入托盘。
 
 卸载时以管理员身份运行 `uninstall.cmd`。配置与日志保留在 `%APPDATA%\MemSweep\`。
 
-也可以绿色运行：从任意目录启动 `MemSweep.exe`，配置保存在 `%APPDATA%\MemSweep\config.ini`。
+想连配置和日志一起带走，可以在首次启动前把空文件 `MemSweep.ini` 放到 `MemSweep.exe` 旁边；不放的话，两者都保存在 `%APPDATA%\MemSweep\`。
 
 ## 命令行
 
@@ -125,7 +136,7 @@ Windows 11 26H2（26340）、i7-12800HX、24 GB 内存、150% 缩放。数字为
 
 | | MemSweep | Mem Reduct | WinMemoryCleaner | Process Lasso (SmartTrim) | ISLC |
 |:---|:---:|:---:|:---:|:---:|:---:|
-| 体积 | 403 KB | ~373 KB（安装包） | ~471 KB + .NET | 安装包 ~3.6 MB，全套 ~80 MB | ~1.5 MB |
+| 体积 | 413 KB | ~373 KB（安装包） | ~471 KB + .NET | 安装包 ~3.6 MB，全套 ~80 MB | ~1.5 MB |
 | 托盘占用 | 3.0 MB | 未公开 | 未公开 | 未公开 | ~27 MB（MakeUseOf 实测） |
 | 前台免疫 | 窗口、父进程链、120 秒焦点历史 | 无 | 无 | 排除名单 | 无 |
 | 按真实压力触发 | 是 | 否 | 否 | 部分 | 部分 |
@@ -165,7 +176,7 @@ build.cmd arm64    :: Windows on ARM64
 
 ## 隐私
 
-没有网络代码：不收集遥测、不检查更新、数据不出本机。应用里唯一的对外链接需要你点击才会打开浏览器。配置和日志都留在 `%APPDATA%\MemSweep\`。
+没有网络代码：不收集遥测，不自动检查更新，数据不出本机。应用里唯一的对外链接需要你点击才会打开浏览器。配置和日志都留在 `%APPDATA%\MemSweep\`。
 
 ## 参与
 

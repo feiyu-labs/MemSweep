@@ -76,7 +76,7 @@ Config GetConfigSnapshot();
 void   PublishConfig(const Config& c);
 
 // ---------------------------------------------------------------------------
-// 策略（纯逻辑，可 /selftest）
+// 策略（可 /selftest；PlanAuto 会读硬缺页速率这个运行期信号）
 // ---------------------------------------------------------------------------
 struct CleanPlan {
     bool trimWS = false;

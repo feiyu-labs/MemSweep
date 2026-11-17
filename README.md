@@ -13,11 +13,16 @@
 </p>
 
 <p align="center">
+  <a href="https://github.com/feiyu-labs/MemSweep/releases/latest"><b>Download for Windows</b></a><br>
+  Windows 10 and 11 · x64 and ARM64 · 413 KB
+</p>
+
+<p align="center">
   <a href="https://github.com/feiyu-labs/MemSweep/actions/workflows/ci.yml"><img src="https://github.com/feiyu-labs/MemSweep/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
   <a href="https://github.com/feiyu-labs/MemSweep/releases/latest"><img src="https://img.shields.io/github/v/release/feiyu-labs/MemSweep?color=emerald" alt="Release"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="License"></a>
-  <img src="https://img.shields.io/badge/platform-Windows%2010%20%7C%2011%20(x64%20%2C%20ARM64)-blue" alt="Platform">
-  <img src="https://img.shields.io/badge/binary-403%20KB-success" alt="Binary size">
+  <img src="https://img.shields.io/badge/platform-Windows%2010%20%7C%2011%20(x64%2C%20ARM64)-blue" alt="Platform">
+  <img src="https://img.shields.io/badge/binary-413%20KB-success" alt="Binary size">
   <img src="https://img.shields.io/badge/tray-3%20MB-success" alt="Tray memory">
   <img src="https://img.shields.io/badge/network-none-green" alt="No network access">
 </p>
@@ -25,9 +30,11 @@
 <p align="center">
   <a href="#install">Install</a> ·
   <a href="#features">Features</a> ·
+  <a href="#compared-with">Compared with</a> ·
   <a href="#command-line">Command line</a> ·
   <a href="#footprint">Footprint</a> ·
-  <a href="#features">Features</a> ·
+  <a href="#faq">FAQ</a> ·
+  <a href="#privacy">Privacy</a> ·
   <a href="#build-from-source">Build</a> ·
   <a href="#roadmap">Roadmap</a> ·
   <a href="CHANGELOG.md">Changelog</a>
@@ -53,18 +60,21 @@ It exists because of how this tool category usually fails: cleaners that flush m
 | | |
 |:---|:---|
 | **Platform** | Windows 10 and 11, native x64 and ARM64 builds |
-| **Size** | 403 KB binary, no runtime dependencies |
+| **Size** | 413 KB binary, no runtime dependencies |
 | **Memory** | 9.5 MB open · 3.0 MB in the tray |
+| **Requirements** | Administrator rights for cleaning; the installer registers a logon task, so daily use never prompts |
 | **License** | MIT |
 
 ## Features
 
-- **It only cleans idle background processes.** The window you're using, the processes it started, and anything you touched in the last two minutes are left alone. A background process has to sit at near-zero CPU for five minutes before it's considered.
-- **It cleans when memory is tight.** Your threshold has to be crossed, and memory has to be short: under 512 MB available, or 95% in use. RAM sitting in the standby list is normal Windows behaviour, not a shortage.
+- **Automatic cleaning only touches idle background apps.** The app you're using, the processes that launched it, and anything you touched in the last two minutes stay untouched. An app qualifies after five minutes of near-zero CPU (the idle time is adjustable). Severe memory shortage also lets a pass trim background apps that are busy, and manual cleaning skips the idle wait.
+- **It cleans when memory is tight.** A pass starts when in-use memory crosses your threshold (85% by default), or when memory is genuinely short: under 512 MB available or 95% in use. RAM sitting in the standby list is normal Windows behaviour, not a shortage.
 - **It won't run operations that freeze Windows.** No modified-page flush, no registry-cache flush, no global working-set sweep, no timer changes, no killing processes.
 - **Duplicate pages can be merged.** Identical physical pages become one copy; it's manual, and pressing any key stops it.
+- **It can clean while you're away.** After ten minutes without input, when memory use or commit is high, it trims idle background apps and merges duplicate pages. Any input stops it.
+- **It shows what Windows is doing.** System status reports memory compression, page combining, SysMain, the pagefile, commit charge, kernel memory and WSL memory reclaim, and exports a diagnostic file.
 - **It stays quiet while you game or present.** No notifications during fullscreen games, presentations or Focus Assist, and automatic passes speak up only when they actually free memory.
-- **It's a 403 KB executable.** Nothing to install, about 3 MB in the tray, light and dark themes, English and Chinese, a hotkey you can change.
+- **It's a 413 KB executable.** No runtime to install, about 3 MB in the tray, light and dark themes, English and Chinese, and a hotkey you can change (Ctrl+Shift+M by default).
 
 <table align="center">
   <tr>
@@ -87,13 +97,13 @@ It exists because of how this tool category usually fails: cleaners that flush m
 
 ## Install
 
-Download `MemSweep-v1.9.18-x64.zip` or `MemSweep-v1.9.18-arm64.zip` from [Releases](https://github.com/feiyu-labs/MemSweep/releases/latest), extract it, then right-click `install.cmd` and choose **Run as administrator**.
+Download `MemSweep-v1.9.19-x64.zip` or `MemSweep-v1.9.19-arm64.zip` from [Releases](https://github.com/feiyu-labs/MemSweep/releases/latest), extract it, then right-click `install.cmd` and choose **Run as administrator**.
 
 The script copies `MemSweep.exe` to `C:\Program Files\MemSweep\`, registers a logon task with elevated privileges so startup never prompts, adds a desktop shortcut and starts MemSweep in the tray.
 
 To remove it, run `uninstall.cmd` as administrator. Settings and logs stay in `%APPDATA%\MemSweep\`.
 
-MemSweep also runs portably: start `MemSweep.exe` from any folder, configuration stays in `%APPDATA%\MemSweep\config.ini`.
+To keep settings and logs beside the program, put an empty file named `MemSweep.ini` in the same folder as `MemSweep.exe` before the first launch. Without it, both stay in `%APPDATA%\MemSweep\`.
 
 ## Command line
 
@@ -126,7 +136,7 @@ A manual clean on this machine has reclaimed 1–3 GB of free pages; the amount 
 
 | | MemSweep | Mem Reduct | WinMemoryCleaner | Process Lasso (SmartTrim) | ISLC |
 |:---|:---:|:---:|:---:|:---:|:---:|
-| Binary size | 403 KB | ~373 KB (installer) | ~471 KB + .NET | ~3.6 MB installer, ~80 MB suite | ~1.5 MB |
+| Binary size | 413 KB | ~373 KB (installer) | ~471 KB + .NET | ~3.6 MB installer, ~80 MB suite | ~1.5 MB |
 | Tray memory | 3.0 MB | not published | not published | not published | ~27 MB (measured by MakeUseOf) |
 | Foreground immunity | Window, parent chain, 120 s focus history | No | No | Exclusion list | No |
 | Trigger checks real pressure | Yes | No | No | Partial | Partial |
@@ -166,7 +176,7 @@ Purging standby lists and trimming the file cache need system privileges. The in
 
 ## Privacy
 
-No network code: no telemetry, no update checks, no data leaves the machine. The only outbound links open a browser when you click them. Configuration and logs stay in `%APPDATA%\MemSweep\`.
+No network code: no telemetry, no automatic update checks, no data leaves the machine. The only outbound links open a browser when you click them. Configuration and logs stay in `%APPDATA%\MemSweep\`.
 
 ## Community
 

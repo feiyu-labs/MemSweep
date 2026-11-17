@@ -2,8 +2,8 @@
 #pragma once
 
 // 单一版本源：UI 关于页、诊断导出、日志共用；资源文件 res/app.rc 仍需手动同步。
-#define MEMSWEEP_VERSION      L"1.9.18"
-#define MEMSWEEP_VERSION_FULL L"1.9.18.0"
+#define MEMSWEEP_VERSION      L"1.9.19"
+#define MEMSWEEP_VERSION_FULL L"1.9.19.0"
 
 
 #define WIN32_LEAN_AND_MEAN
@@ -42,6 +42,7 @@ constexpr UINT WM_APP_PAUSE     = WM_APP + 0x18;
 constexpr UINT WM_APP_COMBINE   = WM_APP + 0x19;
 constexpr UINT WM_APP_SYSINFO   = WM_APP + 0x1A;
 constexpr UINT WM_APP_AUTOSTART = WM_APP + 0x1B;
+constexpr UINT WM_APP_AUTOSTATE  = WM_APP + 0x1C;
 
 constexpr int  HOTKEY_ID        = 1;
 constexpr wchar_t kClassName[]  = L"MemSweepMainWindow";
@@ -239,7 +240,7 @@ struct Config {
     int   standbyFloorMB    = 1024;    // 待机缓存低于此值不清（收益太小）
 
     bool  purgeLow          = true;    // 自动/手动：低优先级待机
-    bool  purgeFullManual   = true;    // 手动：全量待机
+    bool  purgeFullManual   = false;   // 手动：全量待机（只在用户选「深度」时开启）
     bool  sysCache          = true;    // 手动：系统文件缓存
     bool  combinePages      = false;   // 手动深度：合并重复物理页（可能耗时较久，默认关闭）
     bool  idleDeep          = false;   // 离开时深度维护（空闲后修剪 + 合并页，可中止）
@@ -270,7 +271,7 @@ std::wstring ConfigDir();
 std::wstring ConfigPath();
 std::wstring LogPath();
 void LoadConfig();
-void SaveConfig();
+bool SaveConfig();
 void Log(const wchar_t* fmt, ...);
 
 } // namespace ms

@@ -227,27 +227,41 @@ void LoadConfig() {
     }
     auto get  = [&](const wchar_t* k) { auto it = kv.find(k); return it == kv.end() ? std::wstring() : it->second; };
     auto has  = [&](const wchar_t* k) { return kv.find(k) != kv.end(); };
-    auto getB = [&](const wchar_t* k, bool d) { auto v = get(k); if (v.empty()) return d; return v == L"1" || ToLower(v) == L"true"; };
-    auto getI = [&](const wchar_t* k, int d) { auto v = get(k); return v.empty() ? d : _wtoi(v.c_str()); };
+    // 严格解析：坏值回落到默认值，不走 _wtoi 的“读不懂就 0，再被 ClampInt 推到最激进下限”。
+    auto parseInt = [&](const wchar_t* k, int d) {
+        std::wstring v = TrimW(get(k));
+        if (v.empty()) return d;
+        wchar_t* end = nullptr;
+        long n = wcstol(v.c_str(), &end, 10);
+        if (!end || *end != 0 || n < -1000000 || n > 1000000) return d;
+        return (int)n;
+    };
+    auto getB = [&](const wchar_t* k, bool d) {
+        std::wstring v = ToLower(TrimW(get(k)));
+        if (v.empty()) return d;
+        if (v == L"1" || v == L"true" || v == L"yes" || v == L"on") return true;
+        if (v == L"0" || v == L"false" || v == L"no" || v == L"off") return false;
+        return d;
+    };
 
     g_cfg.lang            = get(L"lang").empty() ? L"zh" : get(L"lang");
     g_cfg.theme           = get(L"theme").empty() ? L"auto" : get(L"theme");
     g_cfg.autoGuard       = getB(L"autoguard", true);
-    g_cfg.threshold       = ClampInt(getI(L"threshold", 85), 50, 99);
-    g_cfg.cooldownSec     = ClampInt(getI(L"cooldownsec", 180), 30, 3600);
-    g_cfg.freeFloorMB     = ClampInt(getI(L"freefloormb", 1500), 128, 32768);
-    g_cfg.standbyFloorMB  = ClampInt(getI(L"standbyfloormb", 1024), 64, 32768);
+    g_cfg.threshold       = ClampInt(parseInt(L"threshold", 85), 60, 95);
+    g_cfg.cooldownSec     = ClampInt(parseInt(L"cooldownsec", 180), 30, 3600);
+    g_cfg.freeFloorMB     = ClampInt(parseInt(L"freefloormb", 1500), 128, 32768);
+    g_cfg.standbyFloorMB  = ClampInt(parseInt(L"standbyfloormb", 1024), 64, 32768);
     g_cfg.purgeLow        = getB(L"purgelow", true);
-    g_cfg.purgeFullManual = getB(L"purgefullmanual", true);
+    g_cfg.purgeFullManual = getB(L"purgefullmanual", false);
     g_cfg.sysCache        = getB(L"syscache", true);
     g_cfg.combinePages    = getB(L"combinepages", false);
     g_cfg.idleDeep        = getB(L"idledeep", false);
-    g_cfg.idleDeepSecs    = ClampInt(getI(L"idledeepsecs", 600), 5, 7200);
-    g_cfg.idleDeepCooldownSec = ClampInt(getI(L"idledeepcooldownsec", 21600), 60, 86400);
+    g_cfg.idleDeepSecs    = ClampInt(parseInt(L"idledeepsecs", 600), 5, 7200);
+    g_cfg.idleDeepCooldownSec = ClampInt(parseInt(L"idledeepcooldownsec", 21600), 60, 86400);
     g_cfg.trimWS          = getB(L"trimws", true);
-    g_cfg.minWSAutoMB     = ClampInt(getI(L"minwsautomb", 128), 16, 4096);
-    g_cfg.idleSecs        = ClampInt(getI(L"idlesecs", 300), 30, 7200);
-    g_cfg.focusHistorySec = ClampInt(getI(L"focushistorysec", 120), 15, 600);
+    g_cfg.minWSAutoMB     = ClampInt(parseInt(L"minwsautomb", 128), 16, 4096);
+    g_cfg.idleSecs        = ClampInt(parseInt(L"idlesecs", 300), 30, 7200);
+    g_cfg.focusHistorySec = ClampInt(parseInt(L"focushistorysec", 120), 15, 600);
     // 空字符串是合法值：用户清空保护名单时必须保留，不能回退到默认 VM 名单
     if (has(L"whitelist")) g_cfg.whitelist = get(L"whitelist");
     g_cfg.hotkey          = getB(L"hotkey", true);
@@ -273,7 +287,7 @@ void LoadConfig() {
     PublishConfig(g_cfg);
 }
 
-void SaveConfig() {
+bool SaveConfig() {
     Config c = g_cfg;
     PublishConfig(c);
     std::wstring s;
@@ -306,17 +320,16 @@ void SaveConfig() {
     s += std::wstring(L"hotkey=") + (c.hotkey ? L"1" : L"0") + L"\n";
     s += L"hotkeyCombo=" + c.hotkeyCombo + L"\n";
     s += std::wstring(L"ecoQoS=") + (c.ecoQoS ? L"1" : L"0") + L"\n";
-    if (!WriteTextUtf8(ConfigPath(), s))
+    if (!WriteTextUtf8(ConfigPath(), s)) {
         Log(L"配置写入失败（磁盘满或被占用），本次修改未保存");
+        return false;
+    }
+    return true;
 }
 
+static CRITICAL_SECTION g_logLock;
 void Log(const wchar_t* fmt, ...) {
     CreateDirectoryW(ConfigDir().c_str(), nullptr);
-    WIN32_FILE_ATTRIBUTE_DATA fa{};
-    if (GetFileAttributesExW(LogPath().c_str(), GetFileExInfoStandard, &fa) &&
-        fa.nFileSizeHigh == 0 && fa.nFileSizeLow > 262144) {
-        MoveFileExW(LogPath().c_str(), (ConfigDir() + L"\\log.old.txt").c_str(), MOVEFILE_REPLACE_EXISTING);
-    }
     wchar_t buf[1200];
     va_list ap;
     va_start(ap, fmt);
@@ -331,13 +344,23 @@ void Log(const wchar_t* fmt, ...) {
     int l = WideCharToMultiByte(CP_UTF8, 0, line, -1, nullptr, 0, nullptr, nullptr);
     std::string raw(l > 0 ? l - 1 : 0, 0);
     if (l > 0) WideCharToMultiByte(CP_UTF8, 0, line, -1, raw.data(), l, nullptr, nullptr);
-    HANDLE h = CreateFileW(LogPath().c_str(), FILE_APPEND_DATA, FILE_SHARE_READ, nullptr,
+    // 多线程（清理/合并/系统查询）会同时写日志：串行化避免行交错，
+    // 共享读写删让轮转和外部查看日志都不会把写入挡掉。
+    EnterCriticalSection(&g_logLock);
+    WIN32_FILE_ATTRIBUTE_DATA fa{};
+    if (GetFileAttributesExW(LogPath().c_str(), GetFileExInfoStandard, &fa) &&
+        fa.nFileSizeHigh == 0 && fa.nFileSizeLow > 262144) {
+        MoveFileExW(LogPath().c_str(), (ConfigDir() + L"\\log.old.txt").c_str(), MOVEFILE_REPLACE_EXISTING);
+    }
+    HANDLE h = CreateFileW(LogPath().c_str(), FILE_APPEND_DATA,
+                           FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr,
                            OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
     if (h != INVALID_HANDLE_VALUE) {
         DWORD wr = 0;
         WriteFile(h, raw.data(), (DWORD)raw.size(), &wr, nullptr);
         CloseHandle(h);
     }
+    LeaveCriticalSection(&g_logLock);
 }
 
 // ---------------------------------------------------------------------------
@@ -355,15 +378,27 @@ static bool SetPrivilegeOne(const wchar_t* name, bool enable) {
     CloseHandle(tok);
     return ok && err == ERROR_SUCCESS;
 }
+static CRITICAL_SECTION g_privLock;
+static int g_privDepth = 0;
 void EnablePrivileges() {
-    SetPrivilegeOne(L"SeProfileSingleProcessPrivilege", true);
-    SetPrivilegeOne(L"SeIncreaseQuotaPrivilege", true);
-    SetPrivilegeOne(L"SeDebugPrivilege", true);
+    // 特权在进程令牌上是全局的：清理线程与 UI 线程的“释放此进程内存”会并发调用，
+    // 计数保证一方关闭时另一方还在用的窗口不存在。
+    EnterCriticalSection(&g_privLock);
+    if (g_privDepth++ == 0) {
+        SetPrivilegeOne(L"SeProfileSingleProcessPrivilege", true);
+        SetPrivilegeOne(L"SeIncreaseQuotaPrivilege", true);
+        SetPrivilegeOne(L"SeDebugPrivilege", true);
+    }
+    LeaveCriticalSection(&g_privLock);
 }
 void DisablePrivileges() {
-    SetPrivilegeOne(L"SeProfileSingleProcessPrivilege", false);
-    SetPrivilegeOne(L"SeIncreaseQuotaPrivilege", false);
-    SetPrivilegeOne(L"SeDebugPrivilege", false);
+    EnterCriticalSection(&g_privLock);
+    if (g_privDepth > 0 && --g_privDepth == 0) {
+        SetPrivilegeOne(L"SeProfileSingleProcessPrivilege", false);
+        SetPrivilegeOne(L"SeIncreaseQuotaPrivilege", false);
+        SetPrivilegeOne(L"SeDebugPrivilege", false);
+    }
+    LeaveCriticalSection(&g_privLock);
 }
 
 void PauseAutoGuard(int minutes) {
@@ -385,6 +420,8 @@ static LONG WINAPI CrashFilter(EXCEPTION_POINTERS* ep) {
 
 void InitCore() {
     InitializeCriticalSection(&g_lock);
+    InitializeCriticalSection(&g_privLock);
+    InitializeCriticalSection(&g_logLock);
     if (!g_monEvent) g_monEvent = CreateEventW(nullptr, TRUE, FALSE, nullptr);
     // 系统级低内存事件只作为“立即重新评估”的唤醒；真正的策略阈值仍由
     // ShouldTriggerAuto 决定，避免依赖 OS 较晚的通知阈值。
@@ -843,7 +880,15 @@ void RunClean(const CleanPlan& plan, const Config& c, CleanResult& r, HANDLE can
     }
 
     Snapshot before;
-    TakeSnapshot(before);
+    if (!TakeSnapshot(before)) {
+        // 拿不到清理前基线就中止：否则 before 是全 0，会把整块空闲内存算成“释放量”，
+        // 气泡和日志都会报出几 GB 的假收益。
+        Log(L"清理中止：无法读取清理前内存基线");
+        r.aborted = true;
+        InterlockedExchange(&g_cleanPhase, 0);
+        DisablePrivileges();
+        return;
+    }
     r.availBefore = before.m.availPhys;
     r.freeBefore = before.m.freeBytes;
     r.standbyBefore = before.m.standbyBytes;
@@ -867,6 +912,14 @@ void RunClean(const CleanPlan& plan, const Config& c, CleanResult& r, HANDLE can
             }
             if (p.ws < (unsigned long long)plan.minWSMB * MB) break;   // 已降序
             if (!EligibleForTrim(p, prot, c, plan.requireIdle, plan.minWSMB, true)) continue;
+            // 保护集是清理开始时的快照；手动清理可跑 6 秒，期间用户可能切到别的应用。
+            // 每轮再问一次当前前台，避免修剪刚切过去的窗口。
+            HWND fgNow = GetForegroundWindow();
+            if (fgNow) {
+                DWORD fgPid = 0;
+                GetWindowThreadProcessId(fgNow, &fgPid);
+                if (fgPid == p.pid) continue;
+            }
             r.candidates++;
             HANDLE h = OpenProcess(PROCESS_SET_QUOTA | PROCESS_QUERY_LIMITED_INFORMATION |
                                    PROCESS_SET_INFORMATION, FALSE, p.pid);
@@ -899,6 +952,12 @@ void RunClean(const CleanPlan& plan, const Config& c, CleanResult& r, HANDLE can
             }
             if (p.ws < (unsigned long long)plan.minWSMB * MB) break;
             if (!EligibleForTrim(p, prot, c, plan.requireIdle, plan.minWSMB, false)) continue;
+            HWND fgNow = GetForegroundWindow();
+            if (fgNow) {
+                DWORD fgPid = 0;
+                GetWindowThreadProcessId(fgNow, &fgPid);
+                if (fgPid == p.pid) continue;
+            }
             HANDLE h = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_SET_INFORMATION, FALSE, p.pid);
             if (!h) continue;
             if (SetMemPriorityLow(h) && SetEcoQoS(h, true)) {
@@ -913,7 +972,8 @@ void RunClean(const CleanPlan& plan, const Config& c, CleanResult& r, HANDLE can
     }
 
     // 3) 深度手动：请求内核合并内容相同的物理页。该操作会扫描全内存，
-    //    放在后台线程且仅深度手动模式执行；自动模式永不触发。
+    //    放在后台线程且仅「深度手动」与用户开启的「离开时维护」执行；
+    //    按阈值的自动清理永不合并。
     if (plan.combine && !r.aborted) {
         InterlockedExchange(&g_cleanPhase, 2);
         if (g_hwnd) PostMessageW(g_hwnd, WM_APP_CLEANING, 2, 0);
@@ -928,7 +988,10 @@ void RunClean(const CleanPlan& plan, const Config& c, CleanResult& r, HANDLE can
     }
 
     Snapshot after;
-    TakeSnapshot(after);
+    if (!TakeSnapshot(after)) {
+        // 采样失败时沿用基线，宁可报告 0 收益，也不报一个假数字
+        after = before;
+    }
     r.availAfter = after.m.availPhys;
     r.freeAfter = after.m.freeBytes;
     r.standbyAfter = after.m.standbyBytes;
@@ -1133,7 +1196,9 @@ static DWORD WINAPI IdleDeepThread(LPVOID) {
 
     if (watcher) {
         if (stop) SetEvent(stop);
-        WaitForSingleObject(watcher, 1000);
+        // stop 一置位，watcher 的 WaitForSingleObject 立刻返回；这里必须等它真正退出，
+        // 否则 ctx 是栈对象，超时后继续会读到已释放的栈和句柄。
+        WaitForSingleObject(watcher, INFINITE);
         CloseHandle(watcher);
     }
     if (stop) CloseHandle(stop);
@@ -1203,8 +1268,10 @@ void MonitorTick() {
         if (dt > 0.5 && s.m.hardFaultsCumulative >= g_prevHardFaults)
             g_hfPerSec.store((double)(s.m.hardFaultsCumulative - g_prevHardFaults) / dt,
                              std::memory_order_relaxed);
-        g_prevHardFaults = s.m.hardFaultsCumulative;
     }
+    // 首个采样只用来播种基线：否则第二个 tick 会把开机以来的累计缺页算成“每秒速率”，
+    // 界面瞬间显示几百万/s，还会触发颠簸保护挡掉当轮缓存清理。
+    g_prevHardFaults = s.m.hardFaultsCumulative;
     g_prevTickMs = now;
     s.m.hardFaultsPerSec = g_hfPerSec.load(std::memory_order_relaxed);
 
@@ -1321,7 +1388,8 @@ bool CombinePages(CombineResult& out, DWORD timeoutMs, HANDLE externalCancel) {
     out.pagesCombined = (unsigned long long)info.PagesCombined;
     if (stop) SetEvent(stop);
     if (watchdog) {
-        WaitForSingleObject(watchdog, 1000);
+        // 同上：watch 是栈对象，必须等线程退出后才能释放句柄、离开作用域
+        WaitForSingleObject(watchdog, INFINITE);
         CloseHandle(watchdog);
     }
     if (stop) CloseHandle(stop);
@@ -1346,7 +1414,25 @@ bool TrimPid(DWORD pid) {
     EnablePrivileges();
     HANDLE h = OpenProcess(PROCESS_SET_QUOTA | PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid);
     if (!h) { DisablePrivileges(); return false; }
-    BOOL ok = EmptyWorkingSet(h);
+    // /trimpid 走的是同一套保护：系统关键进程、保护名单、当前前台进程都不修剪。
+    bool blocked = false;
+    wchar_t path[MAX_PATH] = {};
+    DWORD n = MAX_PATH;
+    if (QueryFullProcessImageNameW(h, 0, path, &n) && n > 0) {
+        std::wstring name = path;
+        size_t p = name.find_last_of(L'\\');
+        if (p != std::wstring::npos) name = name.substr(p + 1);
+        blocked = IsProtectedName(name);
+    } else {
+        blocked = true;   // 连名字都拿不到，不冒险
+    }
+    if (!blocked) {
+        HWND fg = GetForegroundWindow();
+        DWORD fpid = 0;
+        if (fg) GetWindowThreadProcessId(fg, &fpid);
+        blocked = (fpid == pid);
+    }
+    BOOL ok = blocked ? FALSE : EmptyWorkingSet(h);
     CloseHandle(h);
     DisablePrivileges();
     return ok != 0;
@@ -1457,11 +1543,15 @@ bool SelfTest() {
     chk(ph.trimWS && !ph.requireIdle && !ph.purgeFull && ph.purgeLow,
         L"high load keeps high-priority cache");
 
-    // 手动计划
+    // 手动计划：默认「均衡」——修剪 + 低优先级缓存 + 文件缓存，不动全量缓存、不合并页
     CleanPlan pm = PlanManual(c);
-    chk(pm.trimWS && pm.purgeFull && pm.sysCache && !pm.requireIdle, L"manual plan");
+    chk(pm.trimWS && !pm.purgeFull && pm.purgeLow && pm.sysCache && !pm.requireIdle,
+        L"default manual plan is balanced");
     chk(pm.minWSMB == 8, L"manual min ws");
     chk(pm.combine == c.combinePages, L"manual combine follows config");
+    c.purgeFullManual = true;
+    chk(PlanManual(c).purgeFull, L"deep manual plan purges full standby");
+    c.purgeFullManual = false;
 
     // 离开时维护：空闲后台 + 低优先级缓存 + 页合并；不清全量缓存/文件缓存
     CleanPlan pidle = PlanIdle(c);

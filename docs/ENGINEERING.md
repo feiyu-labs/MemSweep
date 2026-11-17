@@ -45,9 +45,11 @@ res/             图标、UAC 清单、版本信息
     同一概念全应用只用一个词；行话（工作集/抖动/EcoQoS 字样）不得出现在用户可见文案。
     阈值 = “内存高于”；列表 = “内存占用前 N”；估算 = “可释放约”；合并 = “合并中”。
     开关副文案必须写清「状态 + 效果」（“已开启 · 不弹完成通知”），不得反向描述；
-    不得使用绝对承诺（“零卡顿”“无感”）。
+    不得使用绝对承诺（“零卡顿”“无感”）。开关副文案只有 `r.Width - 58` 的宽度，
+    统一用省略号收尾；新增或改写的副文案必须中英各渲染一张确认没被截断。
 14. **设置减法**：高级设置固定 5 项；抖动保护内置护栏不暴露开关；
-    页面合并跟随「清理力度=深度」，不设独立开关；静默模式在设置页（不到高级层）；
+    页面合并跟随「清理力度=深度」，不设独立开关；**默认力度是「均衡」**（全量缓存与合并页都关），
+    只有用户主动选「深度」才升级；静默模式在设置页（不到高级层）；
     新增设置项必须先证明不能并入现有项；主题/语言**只在标题栏**，设置页不得重复（v1.9.7）。
     设置页分组的组间距 ≥14px；新增一行前先确认还能维持这个呼吸感。
 15. **原生控件占位符**：只要有一个原生 `Edit` 盖在 GDI+ 绘制层上，GDI+ 画的占位符就不可见——
@@ -58,6 +60,7 @@ res/             图标、UAC 清单、版本信息
 17. **发布物完整性**：两个架构的 zip 必须包含 `MemSweep.exe`（统一名）、`install.cmd`、
     `uninstall.cmd`、`INSTALL.txt`、`LICENSE`；`install.cmd` 要同时支持 zip 根目录与 `dist\`；
     CI 必须编译 ARM64；release 的 `gh` 参数用显式文件列表，不依赖 shell 通配符。
+    两个 `.cmd` 都是 UTF-8，开头必须 `chcp 65001 >nul`，否则中文提示在 936 控制台是乱码。
 18. **布局完整性 / 模态绘制**：`BuildLayout` 必须为当前屏幕的**所有**绘制几何赋值，
     不得按 Sheet 状态跳过首页矩形（`Layout()` 的 `RectF` 默认构造不初始化，读到即随机坐标，
     v1.9.4 左上角残影教训）。Sheet 打开时 `DrawAll` 只画「背景 + 遮罩 + Sheet」，
@@ -181,6 +184,9 @@ build.cmd test     :: dev + /selftest + /idlecheck + /uipng + /checkpng
 - [ ] 主屏/设置/系统 Sheet Private < 20MB，Ping < 50ms（150% DPI）
 - [ ] Sheet 200ms 后无额外位图/定时器，空闲无持续 60fps
 - [ ] 安装版 SHA256 与 dist 一致
+- [ ] README/README.zh-CN 里的体积、占用与版本号都从本次 `dist` 实测更新，不沿用上一版
+- [ ] winget 清单已按本次 tag 重新生成（`packaging/winget/make-winget-manifest.ps1 vX.Y.Z`），
+  `winget validate --manifest <目录>` 通过；schema 1.28.0，文件名必须是 `<id>.locale.en-US.yaml`
 - [ ] `docs/release-notes/<tag>.md` 已写：按 `_TEMPLATE.md` 的三条规矩——一句话概述 + 3–5 条用户可见变化、
   不写实现细节/包体/测试结果、英文在前中文在后；`release.yml` 优先用它，缺失才退回自动生成
 - [ ] README/CHANGELOG/RESEARCH/ENGINEERING 更新
