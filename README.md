@@ -14,7 +14,7 @@
 
 <p align="center">
   <a href="https://github.com/feiyu-labs/MemSweep/releases/latest"><b>Download for Windows</b></a><br>
-  Windows 10 and 11 · x64 and ARM64 · 413 KB
+  Windows 10 and 11 · x64 and ARM64 · 441 KB
 </p>
 
 <p align="center">
@@ -22,7 +22,7 @@
   <a href="https://github.com/feiyu-labs/MemSweep/releases/latest"><img src="https://img.shields.io/github/v/release/feiyu-labs/MemSweep?color=emerald" alt="Release"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="License"></a>
   <img src="https://img.shields.io/badge/platform-Windows%2010%20%7C%2011%20(x64%2C%20ARM64)-blue" alt="Platform">
-  <img src="https://img.shields.io/badge/binary-413%20KB-success" alt="Binary size">
+  <img src="https://img.shields.io/badge/binary-441%20KB-success" alt="Binary size">
   <img src="https://img.shields.io/badge/tray-3%20MB-success" alt="Tray memory">
   <img src="https://img.shields.io/badge/network-none-green" alt="No network access">
 </p>
@@ -53,28 +53,28 @@
 
 ## What it is
 
-MemSweep reclaims memory held by idle background processes, so the apps you're using stay responsive. It's a single 413 KB executable with no drivers, background services, or network code.
+MemSweep reclaims memory held by idle background processes, so the apps you're using stay responsive. It's a single 441 KB executable with no drivers, background services, or network code.
 
-Instead of flushing modified pages or sweeping every process on a fixed timer, it waits until memory is tight, trims only idle background apps, and logs what it freed.
+Instead of flushing modified pages or sweeping every process on a fixed timer, it waits until memory is tight, trims only idle background apps, and logs what it freed—along with how much stays freed ten seconds later.
 
 | | |
 |:---|:---|
 | **Platform** | Windows 10 and 11, native x64 and ARM64 builds |
-| **Size** | 413 KB binary, no runtime dependencies |
+| **Size** | 441 KB binary, no runtime dependencies |
 | **Memory** | 9.5 MB open · 3.0 MB in the tray |
 | **Requirements** | Administrator rights for cleaning; the installer registers a logon task, so daily use never prompts |
 | **License** | MIT |
 
 ## Features
 
-- **Automatic cleaning only touches idle background apps.** The app you're using, the processes that launched it, and anything you touched in the last two minutes stay untouched. Background apps qualify after five minutes of near-zero CPU (adjustable in Settings). During severe shortages, a pass can trim busy background apps too, and manual cleans skip the idle wait.
-- **It cleans when memory is tight.** A pass starts when in-use memory passes your threshold (85% by default), or when memory gets genuinely low: under 512 MB available or 95% in use. Standby cache is normal Windows behavior, not a shortage.
+- **Automatic cleaning only touches idle background apps.** The app you're using, the processes that launched it, and anything you touched in the last two minutes stay untouched. Background apps qualify after five minutes of near-zero CPU (adjustable in Settings). When memory compression is high, MemSweep spaces out repeat trims so apps don't bounce right back.
+- **It clears real bottlenecks instead of spinning on 0 MB.** A pass starts when in-use memory passes your threshold (85% by default) or memory gets low. When free pages stay starved even though gigabytes sit in higher-priority standby cache, automatic passes can clear the full standby list once every ten minutes when paging is calm.
+- **Efficiency mode lowers busy background CPU, disk I/O, and memory priority.** When turned on in Advanced settings, busy non-foreground processes temporarily yield CPU and I/O priority while you work, and return to normal the moment they settle or you switch back to them.
+- **Processes are grouped by app.** Chrome, Electron, and IDE windows roll up into one total per app, so you can see who's holding memory, protect the whole app in one click, or right-click to free all its background instances at once.
 - **It won't run operations that freeze Windows.** No modified-page flush, no registry-cache flush, no global working-set sweep, no timer changes, and no killing processes.
-- **Duplicate pages can be merged.** Identical physical pages become one copy; it runs manually and stops the moment you press a key.
-- **It can clean while you're away.** After ten minutes with no input, when memory use or commit charge is high, it trims idle background apps and merges duplicate pages. Any input stops it.
-- **It shows what Windows is doing.** System status reports memory compression, page combining, SysMain, the page file, commit charge, kernel memory, and WSL memory reclaim, and exports diagnostics.
-- **It stays quiet while you game or present.** No notifications during fullscreen games, presentations, or Focus Assist, and automatic passes notify only when they actually free memory.
-- **It runs from one 413 KB executable.** No runtime to install, about 3 MB in the tray, light and dark themes, English and Chinese, and a hotkey you can change (Ctrl+Shift+M by default).
+- **Duplicate pages can be merged.** Identical physical pages become one copy; it runs manually in Deep cleanup or while you're away and stops the moment you press a key.
+- **It checks what Windows is doing and verifies results.** System status reports compression, page combining, SysMain, the page file, commit charge, kernel memory, and WSL memory reclaim, while `/dryrun` and diagnostics show per-area totals, top apps by commit, and net retention 10 seconds after a manual clean.
+- **It stays quiet and light.** No notifications during fullscreen games, presentations, or Focus Assist; one 441 KB file, about 3 MB in the tray, light and dark themes, English and Chinese, and a customizable hotkey (Ctrl+Shift+M by default).
 
 <table align="center">
   <tr>
@@ -97,7 +97,7 @@ Instead of flushing modified pages or sweeping every process on a fixed timer, i
 
 ## Install
 
-Download `MemSweep-v1.9.20-x64.zip` or `MemSweep-v1.9.20-arm64.zip` from [Releases](https://github.com/feiyu-labs/MemSweep/releases/latest), extract it, then right-click `install.cmd` and choose **Run as administrator**.
+Download `MemSweep-v2.0.0-x64.zip` or `MemSweep-v2.0.0-arm64.zip` from [Releases](https://github.com/feiyu-labs/MemSweep/releases/latest), extract it, then right-click `install.cmd` and choose **Run as administrator**.
 
 The script copies `MemSweep.exe` to `C:\Program Files\MemSweep\`, registers an elevated logon task so startup never prompts, adds a desktop shortcut, and starts MemSweep in the tray.
 
@@ -136,7 +136,7 @@ A manual clean on this machine reclaims 1–3 GB of free pages depending on what
 
 | | MemSweep | Mem Reduct | WinMemoryCleaner | Process Lasso (SmartTrim) | ISLC |
 |:---|:---:|:---:|:---:|:---:|:---:|
-| Binary size | 413 KB | ~373 KB (installer) | ~471 KB + .NET | ~3.6 MB installer, ~80 MB suite | ~1.5 MB |
+| Binary size | 441 KB | ~373 KB (installer) | ~471 KB + .NET | ~3.6 MB installer, ~80 MB suite | ~1.5 MB |
 | Tray memory | 3.0 MB | Not published | Not published | Not published | ~27 MB (measured by MakeUseOf) |
 | Foreground immunity | Window, parent chain, 120 s focus history | No | No | Exclusion list | No |
 | Trigger checks real pressure | Yes | No | No | Partial | Partial |
@@ -184,9 +184,8 @@ Bug reports and pull requests are welcome—see [CONTRIBUTING.md](CONTRIBUTING.m
 
 ## Roadmap
 
-1. **winget package and code signing** — install and update from the package manager without verifying hashes by hand.
-2. **Per-area cleaning switches** — toggle standby, file cache, and page combining individually with a dry-run preview of each.
-3. **Impact diagnostics** — compare hard-fault and reload-latency counters before and after a clean.
+1. **Signed releases and winget updates** — code-signed binaries and `winget upgrade feiyu-labs.MemSweep` once the community package review lands.
+2. **Per-app memory profiles** — custom protection presets for browsers, IDEs, and local AI tools.
 
 Not planned: process termination, RAM "defragmentation", timer-resolution tweaks, or network features.
 

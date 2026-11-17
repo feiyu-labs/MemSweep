@@ -2,8 +2,8 @@
 #pragma once
 
 // 单一版本源：UI 关于页、诊断导出、日志共用；资源文件 res/app.rc 仍需手动同步。
-#define MEMSWEEP_VERSION      L"1.9.20"
-#define MEMSWEEP_VERSION_FULL L"1.9.20.0"
+#define MEMSWEEP_VERSION      L"2.0.0"
+#define MEMSWEEP_VERSION_FULL L"2.0.0.0"
 
 
 #define WIN32_LEAN_AND_MEAN
@@ -224,9 +224,9 @@ struct Config {
     int   standbyFloorMB    = 1024;    // 待机缓存低于此值不清（收益太小）
 
     bool  purgeLow          = true;    // 自动/手动：低优先级待机
-    bool  purgeFullManual   = false;   // 手动：全量待机（只在用户选「深度」时开启）
-    bool  sysCache          = true;    // 手动：系统文件缓存
-    bool  combinePages      = false;   // 手动深度：合并重复物理页（可能耗时较久，默认关闭）
+    bool  purgeFullManual   = true;    // 手动「均衡」/「深度」：全量待机缓存
+    bool  sysCache          = true;    // 手动「均衡」/「深度」：系统文件缓存
+    bool  combinePages      = false;   // 手动「深度」：合并重复物理页（默认关闭）
     bool  idleDeep          = false;   // 离开时深度维护（空闲后修剪 + 合并页，可中止）
     int   idleDeepSecs      = 600;     // 空闲判定秒数（默认 10 分钟）
     int   idleDeepCooldownSec = 21600; // 两次离开维护的最小间隔（默认 6 小时）

@@ -30,8 +30,17 @@ struct Metrics {
 
 struct ProcInfo {
     DWORD pid = 0, ppid = 0, sessionId = 0;
-    unsigned long long ws = 0, wsPrivate = 0, cpu100ns = 0, createTime = 0;
+    unsigned long long ws = 0, wsPrivate = 0, commit = 0, cpu100ns = 0, createTime = 0;
     std::wstring name;
+};
+
+struct ReclaimBreakdown {
+    unsigned long long standbyLowBytes = 0;   // Priority 0 待机缓存
+    unsigned long long standbyHighBytes = 0;  // Priority 1–7 待机缓存
+    unsigned long long trimPrivBytes = 0;     // 符合条件的闲置后台进程专用工作集
+    size_t trimCandidates = 0;
+    unsigned long long compressedBytes = 0;
+    double commitPct = 0.0;
 };
 
 struct Snapshot {
@@ -95,17 +104,18 @@ bool IsSeverePressure(const Metrics& m);
 bool ShouldTriggerAuto(const Config& c, const Metrics& m, ULONGLONG nowMs, ULONGLONG lastAutoMs);
 
 // 自动计划：空闲后台修剪 + 条件性低优先级缓存清理；
-// 真实压力下才升级为“非空闲后台修剪 + 全量缓存”，绝不自动合并页。
-CleanPlan PlanAuto(const Config& c, const Metrics& m, bool hasCandidates);
-// 手动计划：默认均衡（修剪 + 低优先级缓存 + 文件缓存）；深度时全量待机并合并重复页
+// 真实压力或空闲页严重枯竭（有冷却保护）时才升级全量缓存，绝不自动合并页。
+CleanPlan PlanAuto(const Config& c, const Metrics& m, bool hasCandidates,
+                   ULONGLONG nowMs = 0, ULONGLONG lastFullPurgeMs = 0);
+// 手动计划：温和（空闲修剪+低优缓存）/ 均衡（修剪+全量缓存+文件缓存）/ 深度（+合并重复页）
 CleanPlan PlanManual(const Config& c);
 // 离开时维护：只处理空闲后台 + 低优先级缓存 + 合并页；不清全量缓存/文件缓存
 CleanPlan PlanIdle(const Config& c);
 
-// 保护判定
+// 保护判定与分区可回收估算
 bool IsProtectedProcess(const ProcInfo& p, const std::unordered_set<DWORD>& protectedPids);
 size_t CountTrimCandidates(const Snapshot& s, bool requireIdle, int minWSMB, const Config& c);
-// 可回收估算：空闲候选私有WS + 低优先级/全量缓存（随清理力度）
+ReclaimBreakdown ComputeReclaimBreakdown(const Snapshot& s, const Config& c);
 unsigned long long ComputeReclaimable(const Snapshot& s, const Config& c, size_t* candidatesOut = nullptr);
 
 // ---------------------------------------------------------------------------
@@ -121,8 +131,17 @@ struct CombineResult {
 };
 bool CombinePages(CombineResult& out, DWORD timeoutMs = 60000, HANDLE externalCancel = nullptr);
 bool TrimPid(DWORD pid);
+bool TrimAppByName(const std::wstring& procName, int* trimmedOut = nullptr,
+                   unsigned long long* privFreedOut = nullptr);
 bool IsProtectedName(const std::wstring& name);
 bool IsBuiltinProtectedName(const std::wstring& name);
+std::wstring GetLastImpactSummary();
+struct AppMemAgg {
+    std::wstring name, display;
+    int count = 0;
+    unsigned long long priv = 0, commit = 0;
+};
+std::vector<AppMemAgg> AggregateApps(const Snapshot& s, bool sortByCommit);
 
 struct CleanResult {
     bool standbyLow = false, standbyFull = false, cache = false;

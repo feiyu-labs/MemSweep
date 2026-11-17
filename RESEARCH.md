@@ -149,6 +149,36 @@ PagefileUsage@184` 全部正确；`SYSTEM_MEMORY_LIST_INFORMATION`（22×SIZE_T�
 | 热键冲突 | 注册失败写日志；菜单/中键兜底 | 日志验证 |
 | 杀软误报 | 无网络/注入/驱动；提供 SHA256 | — |
 
+---
+
+## 八、v2.0 实机基准与响应突破调研（2026-11-18）
+
+在 Windows 11 26H2（Build 26340，i7-12800HX，24 GB 内存）高负载场景（使用率 84%，已提交 47.2 / 50.8 GB = 90.8%，内存压缩 5.78 GB / 2.25×）下，针对「自动清理常仅释放 +0 MB」「合并耗时未知」「高提交下桌面卡顿」进行了提权沙盒基准测试：
+
+### 8.1 Standby 8 优先级分布（`SystemMemoryListInformation`）
+
+| 优先级桶 | P0（低优） | P1–P4 | P5（普通） | P6 | P7 | 合计 |
+|---|---:|---:|---:|---:|---:|---:|
+| 实测待机缓存 | **0 MB** | 0 MB | **3,367 MB（97.6%）** | 25 MB | 57 MB | 3,449 MB |
+
+**结论**：Windows 11 高负载时，几乎全部待机缓存集中在 Priority 5，Priority 0 往往只有 0–几 MB。这直接解释了为何旧版自动清理（仅调用 `MemoryPurgeLowPriorityList`）在 `freeBytes = 0.4–35 MB` 长期饥饿时仍频频空跑 `+0 MB`。
+因此 v2.0 在 `PlanAuto()` 中增加受控升级：仅当 `free < 64 MB`、`P0 < 32 MB`、总待机 `≥ 2 GB`、`loadPct ≥ 阈值 + 5` 且硬缺页 `< 1500/s` 时，每 10 分钟最多执行一次全量待机清理。
+
+### 8.2 页面合并标志对比（`SystemCombinePhysicalMemoryInformation = 130`）
+
+| 标志 | 结果（Win11 26H2 26340） | 耗时 | 合并页数 / 释放 |
+|---|---|---:|---|
+| `Flags = 4` (`CommonPagesOnly`) | **`0xC00000F1` (`STATUS_INVALID_PARAMETER_3`)** | < 1 ms | 不支持，禁止使用 |
+| `Flags = 0` (`None` 全量) | **`0x00000000` (`STATUS_SUCCESS`)** | 6,594 ms | 150,212 页（约 586 MB），空闲 315 → 796 MB，可用 3,752 → 4,695 MB |
+
+**结论**：Windows 11 26H2 内核拒绝 `Flags = 4`，只有 `Flags = 0` 可用且通常耗时 6–15 秒。因此保持手动默认「均衡」档不自动触发合并，将合并保留在「深度」档与「离开时维护」（可按任意键中止）。
+
+### 8.3 提交内存来源与响应优化突破
+
+- `/dryrun` 按应用名聚合 `PagefileUsage` 实测显示，高提交主要来自多进程应用（如 `chrome` ×53 占提交 9.8 GB、`zcode` ×37 占 5.0 GB、`claude` ×12 占 4.4 GB）。单纯修剪工作集只能缓解物理页紧张，若同时面对后台高 CPU/磁盘分页 I/O 争用，前台仍会卡顿。
+- v2.0 在「后台效率模式」下新增 `NtSetInformationProcess(ProcessIoPriority = 33, IO_PRIORITY_LOW = 1)` 与基于 `MonitorTick` 的可逆动态 CPU 让路（非前台、非保护后台进程连续 2 个采样周期占满 `≥ 12%` 总 CPU 时临时降为 `BELOW_NORMAL_PRIORITY_CLASS`，低于 `5%`、切回前台、关闭开关或退出时立即恢复 `NORMAL_PRIORITY_CLASS`）。
+- 每次手动清理后 10 秒自动复核空闲/可用净保留量与硬缺页变化，写入日志和导出诊断，避免“盲目清理后立刻回弹却无感知”。
+
 **永不做**：脏页刷盘、注册表刷盘、全局一刀切、定时器分辨率 hack、结束/挂起进程、联网/遥测。
 
 ---

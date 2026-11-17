@@ -139,6 +139,14 @@ int APIENTRY wWinMain(HINSTANCE hInst, HINSTANCE, PWSTR, int) {
     if (dryrun) {
         EnsureConsole();
         ConPrint(L"MemSweep dry-run (no changes)\n");
+        Snapshot s;
+        if (TakeSnapshot(s)) {
+            ReclaimBreakdown bd = ComputeReclaimBreakdown(s, GetConfigSnapshot());
+            ConPrint(L"  standby low=%s, high=%s, trim=%d (%s), compressed=%s, commit=%.0f%%\n",
+                     FormatBytes(bd.standbyLowBytes).c_str(), FormatBytes(bd.standbyHighBytes).c_str(),
+                     (int)bd.trimCandidates, FormatBytes(bd.trimPrivBytes).c_str(),
+                     FormatBytes(bd.compressedBytes).c_str(), bd.commitPct);
+        }
         RequestManualClean(true);
         ConPrint(L"details written to: %s\n", LogPath().c_str());
         return 0;

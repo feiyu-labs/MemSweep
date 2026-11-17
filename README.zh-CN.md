@@ -14,7 +14,7 @@
 
 <p align="center">
   <a href="https://github.com/feiyu-labs/MemSweep/releases/latest"><b>下载 Windows 版</b></a><br>
-  Windows 10 / 11 · x64 与 ARM64 · 413 KB
+  Windows 10 / 11 · x64 与 ARM64 · 441 KB
 </p>
 
 <p align="center">
@@ -22,7 +22,7 @@
   <a href="https://github.com/feiyu-labs/MemSweep/releases/latest"><img src="https://img.shields.io/github/v/release/feiyu-labs/MemSweep?color=emerald" alt="Release"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="License"></a>
   <img src="https://img.shields.io/badge/platform-Windows%2010%20%7C%2011%20(x64%2C%20ARM64)-blue" alt="Platform">
-  <img src="https://img.shields.io/badge/binary-413%20KB-success" alt="Binary size">
+  <img src="https://img.shields.io/badge/binary-441%20KB-success" alt="Binary size">
   <img src="https://img.shields.io/badge/tray-3%20MB-success" alt="Tray memory">
   <img src="https://img.shields.io/badge/network-none-green" alt="No network access">
 </p>
@@ -53,28 +53,28 @@
 
 ## 这是什么
 
-MemSweep 回收闲置后台进程占用的内存，你正在用的程序不受影响。它是一个 413 KB 的单个 exe，不装驱动，不跑后台服务，也不联网。
+MemSweep 回收闲置后台进程占用的内存，你正在用的程序不受影响。它是一个 441 KB 的单个 exe，不装驱动，不跑后台服务，也不联网。
 
-同类工具常见的做法是刷写修改页或按固定时间清遍所有进程，容易把桌面卡死。MemSweep 等到内存真的紧张时才动作，只动闲置后台应用，并把释放了多少写进日志。
+同类工具常见的做法是刷写修改页或按固定时间清遍所有进程，容易把桌面卡死。MemSweep 等到内存真的紧张时才动作，只动闲置后台应用，并把释放了多少和 10 秒后的净保留情况写进日志。
 
 | | |
 |:---|:---|
 | **平台** | Windows 10 / 11，提供原生 x64 与 ARM64 版本 |
-| **体积** | 413 KB 单文件，不依赖任何运行库 |
+| **体积** | 441 KB 单文件，不依赖任何运行库 |
 | **占用** | 打开面板 9.5 MB · 托盘常驻 3.0 MB |
 | **权限** | 清理内存需要管理员权限；安装脚本会建开机任务，平时使用不弹 UAC |
 | **许可** | MIT |
 
 ## 特性
 
-- **自动清理只动闲置的后台应用。** 你正在用的窗口、启动它的进程，以及最近两分钟碰过的程序都会跳过。后台应用连续五分钟几乎不用 CPU 才会被清理（时间可在设置里调）。内存严重吃紧时，自动清理也会处理忙碌的后台应用；手动清理不用等空闲。
-- **内存紧张时才清理。** 使用中超过你设的阈值（默认 85%）、可用低于 512 MB，或使用中达到 95%，满足一条就会清理。内存停在「已缓存」里是 Windows 的正常机制，不算缺内存。
+- **自动清理只动闲置的后台应用。** 你正在用的窗口、启动它的进程，以及最近两分钟碰过的程序都会跳过。后台应用连续五分钟几乎不用 CPU 才会被清理（时间可在设置里调）。系统压缩占用较高时，MemSweep 会拉长重复清理的间隔，避免应用刚清完又弹回来。
+- **把真正的内存瓶颈清理干净。** 使用中超过你设的阈值（默认 85%）或内存吃紧时自动开始。当空闲页长期见底而高优先级「已缓存」里还积压着数 GB 时，只要磁盘换页平稳，自动清理每隔十分钟会清一次全量待机缓存，不再空跑 0 MB。
+- **后台效率模式同时管住 CPU、磁盘和内存抢占。** 在高级设置里打开后，非前台的高占用后台进程会暂时降低 CPU 与 I/O 优先级；等它闲下来或你切回这个窗口时，立刻自动恢复正常。
+- **多进程应用合并显示。** 浏览器和开发工具的几十个子进程会按应用合并汇总，一眼看出是谁占满了内存，左键一键保护整个应用，右键一次释放它全部后台实例的内存。
 - **会导致卡死的操作，它不做。** 不刷写修改页、不清注册表缓存、不全局清空所有工作集、不改系统定时器，也不结束进程。
-- **重复的内存页可以合并。** 内容相同的物理页会合并成一份；需要手动开启或触发，按下任意键立刻停下。
-- **离开电脑时也能清理。** 十分钟没有键鼠输入，而且内存或已提交较高时，自动清理闲置后台应用并合并重复页；你一回来就停。
-- **它能查看 Windows 的内存机制。** 系统状态页面显示内存压缩、页面合并、SysMain、页面文件、已提交、内核内存和 WSL 内存回收，还能导出诊断文件。
-- **玩游戏和做演示时不打扰。** 全屏游戏、演示模式或专注助手开启时不弹通知。自动清理只在真的释放了内存时才提醒一次。
-- **一个 413 KB 的 exe。** 不用装运行库，托盘常驻约 3 MB，支持深浅主题、中英文切换和自定义全局热键（默认 Ctrl+Shift+M）。
+- **重复的内存页可以合并。** 内容相同的物理页会合并成一份；在「深度」清理或离开时开启，按下任意键立刻停下。
+- **它能查看系统状态并复核清理效果。** 系统状态页面显示内存压缩、页面合并、SysMain、页面文件、已提交、内核内存和 WSL 内存回收，还能导出含 Top 提交应用与 10 秒效果复核的诊断报告。
+- **一个 441 KB 的 exe。** 不用装运行库，托盘常驻约 3 MB，玩游戏或演示时不打扰，支持深浅主题、中英文切换和自定义全局热键（默认 Ctrl+Shift+M）。
 
 <table align="center">
   <tr>
@@ -97,7 +97,7 @@ MemSweep 回收闲置后台进程占用的内存，你正在用的程序不受�
 
 ## 安装
 
-从 [Releases](https://github.com/feiyu-labs/MemSweep/releases/latest) 下载 `MemSweep-v1.9.20-x64.zip` 或 `MemSweep-v1.9.20-arm64.zip`，解压后右键 `install.cmd`，选择**以管理员身份运行**。
+从 [Releases](https://github.com/feiyu-labs/MemSweep/releases/latest) 下载 `MemSweep-v2.0.0-x64.zip` 或 `MemSweep-v2.0.0-arm64.zip`，解压后右键 `install.cmd`，选择**以管理员身份运行**。
 
 脚本会把 `MemSweep.exe` 复制到 `C:\Program Files\MemSweep\`，建一个高权限登录任务（开机不弹 UAC），加一个桌面快捷方式，然后启动到托盘。
 
@@ -136,7 +136,7 @@ MemSweep.exe /exit           :: 退出正在运行的实例
 
 | | MemSweep | Mem Reduct | WinMemoryCleaner | Process Lasso (SmartTrim) | ISLC |
 |:---|:---:|:---:|:---:|:---:|:---:|
-| 体积 | 413 KB | ~373 KB（安装包） | ~471 KB + .NET | 安装包 ~3.6 MB，全套 ~80 MB | ~1.5 MB |
+| 体积 | 441 KB | ~373 KB（安装包） | ~471 KB + .NET | 安装包 ~3.6 MB，全套 ~80 MB | ~1.5 MB |
 | 托盘占用 | 3.0 MB | 未公开 | 未公开 | 未公开 | ~27 MB（MakeUseOf 实测） |
 | 前台免疫 | 窗口、父进程链、120 秒焦点历史 | 无 | 无 | 排除名单 | 无 |
 | 按真实压力触发 | 是 | 否 | 否 | 部分 | 部分 |
@@ -184,9 +184,8 @@ build.cmd arm64    :: Windows on ARM64
 
 ## 规划
 
-1. **winget 商店包与代码签名**——直接用包管理器安装和升级，不用手动核对校验值。
-2. **按内存区域单独开关**——待机缓存、文件缓存和页面合并各自独立控制，并支持清理前预览。
-3. **效果诊断**——对比清理前后的硬缺页和重新加载延迟，让效果有数据可看。
+1. **代码签名与 winget 升级**——通过软件源审核并签名后，直接用 `winget upgrade feiyu-labs.MemSweep` 更新。
+2. **按应用类型预设规则**——为浏览器、IDE 和本地 AI 工具提供更细的保护预设。
 
 不会加入：结束进程、内存「碎片整理」、调整系统定时器，或任何联网功能。
 

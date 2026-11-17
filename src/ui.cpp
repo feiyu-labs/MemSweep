@@ -188,7 +188,7 @@ static bool g_procFromSettings = false;   // 进程表从设置页进入时显�
 static float g_sheetT = 1.0f;
 static ULONGLONG g_sheetStart = 0;
 static bool g_systemExpanded = false;
-static int g_strength = 2;       // 0 温和 / 1 均衡 / 2 深度
+static int g_strength = 1;       // 0 温和 / 1 均衡 / 2 深度
 static ULONGLONG g_savedAt = 0;
 static ULONGLONG g_ringPulseAt = 0;
 static std::wstring g_wlDraft;
@@ -541,6 +541,7 @@ struct StatCache {
 static Snapshot g_drawSnap;
 static bool g_drawDirty = true;
 static bool g_procListDirty = true;
+static std::wstring g_topProcDesc;
 // 双缓冲
 static Bitmap* g_back = nullptr;
 static Graphics* g_backG = nullptr;
@@ -880,8 +881,8 @@ static void SyncFromConfig() {
     g_coolSel = NearestIndex(g_cfg.cooldownSec, cools, 4);
     g_minWSSel = NearestIndex(g_cfg.minWSAutoMB, mins, 3);
     g_idleSel = NearestIndex(g_cfg.idleSecs, idles, 3);
-    g_strength = (g_cfg.purgeFullManual && g_cfg.sysCache) ? 2
-               : (g_cfg.sysCache ? 1 : 0);
+    g_strength = (g_cfg.combinePages && g_cfg.purgeFullManual && g_cfg.sysCache) ? 2
+               : ((g_cfg.purgeFullManual || g_cfg.sysCache) ? 1 : 0);
     s_idleDeep = g_cfg.idleDeep;
     g_wlDraft = g_cfg.whitelist;
     if (g_edWL) SetWindowTextW(g_edWL, g_cfg.whitelist.c_str());
@@ -986,7 +987,7 @@ static void CommitSettings() {
     // 合并页跟随「深度」力度，不再单独暴露开关
     if (g_strengthDirty) {
         g_cfg.purgeLow = true;
-        g_cfg.purgeFullManual = (g_strength >= 2);
+        g_cfg.purgeFullManual = (g_strength >= 1);
         g_cfg.sysCache = (g_strength >= 1);
         g_cfg.trimWS = true;
         g_cfg.combinePages = (g_strength >= 2);
@@ -1236,10 +1237,6 @@ static void DrawSeg(Graphics& g, const RectF* rs, const wchar_t* const* zh,
     }
 }
 
-static unsigned long long ProcPrivateWS(const ProcInfo& p) {
-    return p.wsPrivate ? p.wsPrivate : p.ws;
-}
-
 static void DrawHomeCard(Graphics& g, const RectF& r, int id,
                          const wchar_t* titleZh, const wchar_t* titleEn,
                          const std::wstring& subText, Color subColor) {
@@ -1466,21 +1463,10 @@ static void DrawHome(Graphics& g) {
     }
     TextAt(g, last, L.lastClean, f11, T.text3);
 
-    // 底部基座卡片：Top1 进程与系统状态微摘要
-    std::wstring topProcDesc;
-    for (const auto& p : g_drawSnap.procs) {
-        if (p.pid <= 4 || p.pid == GetCurrentProcessId() || p.name.empty()) continue;
-        std::wstring n = NormalizeProcName(p.name);
-        if (n.empty() || IsBuiltinProtectedName(n)) continue;
-        topProcDesc = n + L" · " + FormatBytes(ProcPrivateWS(p));
-        break;
-    }
-    if (topProcDesc.empty()) {
-        topProcDesc = Tx(L"查看所有应用", L"View all apps");
-    }
+    // 底部基座卡片：按应用聚合后的 Top1 占用与系统状态微摘要
     DrawHomeCard(g, L.cardProcess, ID_HOME_PROCESS,
                  L"进程 ›", L"Processes ›",
-                 topProcDesc, T.text3);
+                 g_topProcDesc.empty() ? Tx(L"查看所有应用", L"View all apps") : g_topProcDesc, T.text3);
 
     std::wstring sysDesc;
     Color sysColor = T.text3;
@@ -1532,52 +1518,43 @@ static void DrawSheetFrame(Graphics& g, const wchar_t* titleZh, const wchar_t* t
 static void RefreshDrawSnap();
 
 enum class ProcState { Normal, Protected, Builtin };
-struct ProcRow { std::wstring name, display; unsigned long long ws = 0; DWORD pid = 0; ProcState st = ProcState::Normal; };
+struct ProcRow { std::wstring name, display; unsigned long long ws = 0; int count = 0; ProcState st = ProcState::Normal; };
 static std::vector<ProcRow> g_procList;
 static int g_procScroll = 0;
 
-// 一张表同时承担：查看内存占用 / 切换保护 / 右键释放。
-// 名字按精确名去 .exe、小写；系统与 VM 内置保护显示为锁，不可切换。
+// 一张表同时承担：按应用聚合查看总内存 / 切换保护 / 右键释放。
+// 同名多进程（如 chrome/ZCode/claude）合计专用工作集，名字按精确名去 .exe、小写；
+// 系统与 VM 内置保护显示为锁，不可切换。
 static void BuildProcessRows() {
-    std::unordered_map<std::wstring, ProcRow> byName;
-    byName.reserve(g_drawSnap.procs.size());
-    for (const auto& p : g_drawSnap.procs) {
-        if (p.pid <= 4 || p.pid == GetCurrentProcessId() || p.name.empty()) continue;
-        std::wstring n = NormalizeProcName(p.name);
-        if (n.empty()) continue;
-        unsigned long long w = ProcPrivateWS(p);
-        auto it = byName.find(n);
-        if (it == byName.end() || w > it->second.ws) {
-            ProcRow r;
-            r.name = n; r.ws = w; r.pid = p.pid;
-            r.display = p.name;
-            if (r.display.size() > 4 &&
-                _wcsicmp(r.display.c_str() + r.display.size() - 4, L".exe") == 0)
-                r.display.resize(r.display.size() - 4);
-            r.st = IsBuiltinProtectedName(n) ? ProcState::Builtin : ProcState::Normal;
-            byName[n] = r;
-        }
-    }
+    auto apps = AggregateApps(g_drawSnap, false);
+    std::unordered_set<std::wstring> wlSet;
     for (auto raw : SplitCSV(g_cfg.whitelist)) {
         std::wstring n = NormalizeProcName(raw);
-        if (n.empty()) continue;
-        auto it = byName.find(n);
-        if (it != byName.end()) {
-            if (it->second.st != ProcState::Builtin) it->second.st = ProcState::Protected;
-        } else {
-            ProcRow r;
-            r.name = n; r.display = n; r.st = ProcState::Protected;   // 未运行但已保护，排最后
-            byName[n] = r;
-        }
+        if (!n.empty()) wlSet.insert(n);
     }
     g_procList.clear();
-    g_procList.reserve(byName.size());
-    for (auto& kv : byName) g_procList.push_back(std::move(kv.second));
-    // 切换保护不改变排序，避免行在鼠标下跳走
-    std::sort(g_procList.begin(), g_procList.end(), [](const ProcRow& a, const ProcRow& b) {
-        if (a.ws != b.ws) return a.ws > b.ws;
-        return a.name < b.name;
-    });
+    g_procList.reserve(apps.size() + wlSet.size());
+    std::unordered_set<std::wstring> seen;
+    seen.reserve(apps.size() * 2);
+    for (auto& a : apps) {
+        seen.insert(a.name);
+        ProcRow r;
+        r.name = std::move(a.name);
+        r.display = std::move(a.display);
+        r.ws = a.priv;
+        r.count = a.count;
+        r.st = IsBuiltinProtectedName(r.name) ? ProcState::Builtin
+             : (wlSet.count(r.name) ? ProcState::Protected : ProcState::Normal);
+        g_procList.push_back(std::move(r));
+    }
+    std::vector<std::wstring> offline(wlSet.begin(), wlSet.end());
+    std::sort(offline.begin(), offline.end());
+    for (const auto& n : offline) {
+        if (seen.count(n)) continue;
+        ProcRow r;
+        r.name = n; r.display = n; r.count = 0; r.st = ProcState::Protected;
+        g_procList.push_back(std::move(r));
+    }
     g_procListDirty = false;
 }
 
@@ -1635,7 +1612,10 @@ static void DrawProcessSheet(Graphics& g) {
         bool hv = g_hover == (int)(ID_PROC_BASE + i);
         if (hv) FillRound(g, box, 8, T.trackFill);
         Color nameColor = (r.st == ProcState::Builtin) ? T.text3 : T.text;
-        TextAt(g, r.display, RectF(box.X + 12, box.Y, box.Width - 168, box.Height), f12, nameColor,
+        std::wstring label = r.count > 1
+            ? (r.display + L" (" + std::to_wstring(r.count) + L")")
+            : r.display;
+        TextAt(g, label, RectF(box.X + 12, box.Y, box.Width - 168, box.Height), f12, nameColor,
                StringAlignmentNear, StringAlignmentCenter, true);
         if (r.ws)
             TextAt(g, FormatBytes(r.ws), RectF(box.GetRight() - 142, box.Y, 96, box.Height),
@@ -1707,11 +1687,11 @@ static void DrawSettingsSheet(Graphics& g) {
     const wchar_t* strEn[3] = { L"Mild", L"Balanced", L"Deep" };
     DrawSeg(g, L.setStrengthSeg, strZh, strEn, 3, g_strength);
     const wchar_t* hintZh = g_strength == 0 ? L"只清理闲置后台，切回常用应用不受影响"
-                          : g_strength == 1 ? L"推荐 · 兼顾释放空间与日常流畅"
-                                            : L"释放更多并合并内存页，切回后台应用会稍慢";
+                          : g_strength == 1 ? L"推荐 · 清理后台与系统缓存，释放更明显"
+                                            : L"再合并重复内存页，切回后台应用会稍慢";
     const wchar_t* hintEn = g_strength == 0 ? L"Only idle apps; switching back stays instant"
-                          : g_strength == 1 ? L"Recommended · balances freed memory and responsiveness"
-                                            : L"Frees more and merges pages; background apps reload slower";
+                          : g_strength == 1 ? L"Recommended · trims background apps and clears standby cache"
+                                            : L"Also merges duplicate pages; background apps reload slower";
     TextAt(g, Tx(hintZh, hintEn), L.setStrengthHint, f11, T.text3);
 
     TextAt(g, Tx(L"保护名单", L"Protected list"), L.setWlLbl, f12, T.text2);
@@ -1802,8 +1782,8 @@ static void DrawAdvancedSheet(Graphics& g) {
     DrawAdvancedHotkeyRow(g);
     DrawSwitchRow(g, L.advEcoRow, L"后台效率模式", L"Efficiency mode", s_eco,
                   ToggleValue(ID_TG_ECO, s_eco),
-                  Tx(L"闲置后台应用降到低优先级，正在用的程序优先",
-                     L"Idle apps run at lower priority than what you use"));
+                  Tx(L"自动降低高占用后台的 CPU、I/O 与内存优先级",
+                     L"Lowers busy background CPU, I/O, and memory priority"));
     wchar_t idleSubZh[128] = {}, idleSubEn[128] = {};
     if (g_cfg.idleDeepSecs >= 60) {
         int m = g_cfg.idleDeepSecs / 60;
@@ -1890,6 +1870,14 @@ static void RefreshDrawSnap() {
     LeaveCriticalSection(&g_lock);
     g_drawDirty = false;
     g_procListDirty = true;
+
+    // 同步更新首页 Top1 应用摘要（复用 AggregateApps，按应用名聚合）
+    g_topProcDesc.clear();
+    for (const auto& a : AggregateApps(g_drawSnap, false)) {
+        if (IsBuiltinProtectedName(a.name)) continue;
+        g_topProcDesc = a.name + L" · " + FormatBytes(a.priv);
+        break;
+    }
 }
 
 static void DrawAll(Graphics& g, const RectF* clip) {
@@ -2389,14 +2377,19 @@ static void StartCombine(bool needConfirm) {
 static void ShowProcMenu(int row) {
     if (row < 0 || row >= (int)g_procList.size()) return;
     // TrackPopupMenu 会跑自己的消息循环，期间每次重绘都会 BuildProcessRows() 重建
-    // g_procList —— 引用会悬空，甚至修剪到别的 PID。先把要用的字段拷出来。
-    const DWORD pid = g_procList[row].pid;
+    // g_procList —— 引用会悬空，甚至修剪到别的进程。先把要用的字段拷出来。
+    const std::wstring name = g_procList[row].name;
     const std::wstring display = g_procList[row].display;
     const unsigned long long ws = g_procList[row].ws;
-    const bool can = (pid != 0 && g_procList[row].st == ProcState::Normal);
+    const int count = g_procList[row].count;
+    const bool can = (count > 0 && g_procList[row].st == ProcState::Normal);
     wchar_t trimLabel[160];
-    swprintf(trimLabel, 160, Tx(L"释放此进程内存（%s）", L"Free this app's memory (%s)"),
-             FormatBytes(ws).c_str());
+    if (count > 1)
+        swprintf(trimLabel, 160, Tx(L"释放此应用后台内存（%d 个进程 · %s）", L"Free background instances (%d · %s)"),
+                 count, FormatBytes(ws).c_str());
+    else
+        swprintf(trimLabel, 160, Tx(L"释放此进程内存（%s）", L"Free this app's memory (%s)"),
+                 FormatBytes(ws).c_str());
     HMENU m = CreatePopupMenu();
     AppendMenuW(m, MF_STRING | (can ? 0 : MF_GRAYED), 1, trimLabel);
     AppendMenuW(m, MF_SEPARATOR, 0, nullptr);
@@ -2408,10 +2401,24 @@ static void ShowProcMenu(int row) {
     DestroyMenu(m);
     PostMessageW(g_hwnd, WM_NULL, 0, 0);
     if (cmd == 1) {
-        bool ok = TrimPid(pid);
+        int trimmed = 0;
+        unsigned long long freed = 0;
+        bool ok = TrimAppByName(name, &trimmed, &freed);
         if (ok && g_monEvent) SetEvent(g_monEvent);
-        ShowToast(ok ? (Tx(L"已释放 ", L"Freed ") + display + L" · " + FormatBytes(ws))
-                     : (Tx(L"释放失败：", L"Couldn't free: ") + display));
+        if (ok) {
+            wchar_t msg[160];
+            if (count > 1)
+                swprintf(msg, 160, Tx(L"已释放 %s（%d 个后台实例 · 原约 %s）", L"Freed %s (%d instances · ~%s)"),
+                         display.c_str(), trimmed, FormatBytes(freed).c_str());
+            else
+                swprintf(msg, 160, Tx(L"已释放 %s · %s", L"Freed %s · %s"),
+                         display.c_str(), FormatBytes(freed ? freed : ws).c_str());
+            ShowToast(msg);
+        } else {
+            ShowToast(count > 1 ? Tx(L"没有可释放的后台实例（当前前台已跳过）",
+                                     L"No background instances to free (foreground kept)")
+                                : (Tx(L"释放失败：", L"Couldn't free: ") + display));
+        }
     }
 }
 
@@ -3341,6 +3348,25 @@ static void ExportDiagnostics() {
              (int)st.sysmainRunning, (int)st.fastStartupOn, (int)st.wslEnabled,
              st.pagingFiles.c_str(), st.pfInitMB, st.pfMaxMB, st.pfAllocMB);
     out += line;
+    std::wstring impact = GetLastImpactSummary();
+    if (!impact.empty()) {
+        out += L"[last clean impact +10s]\r\n" + impact + L"\r\n\r\n";
+    }
+    {
+        Snapshot snap;
+        if (TakeSnapshot(snap)) {
+            auto apps = AggregateApps(snap, true);
+            out += L"[top apps by commit]\r\n";
+            for (size_t i = 0; i < apps.size() && i < 10; i++) {
+                swprintf(line, 1024, L"%-24s x%-2d priv=%8s commit=%8s\r\n",
+                         apps[i].name.c_str(), apps[i].count,
+                         FormatBytes(apps[i].priv).c_str(),
+                         FormatBytes(apps[i].commit).c_str());
+                out += line;
+            }
+            out += L"\r\n";
+        }
+    }
     out += L"[config]\r\n" + ReadTextFileW(ConfigPath()) + L"\r\n[log tail]\r\n";
     std::wstring log = ReadTextFileW(LogPath());
     std::vector<std::wstring> lines;
@@ -3552,6 +3578,12 @@ int RenderSysCheckSnapshot(const std::wstring& path) {
             else if (_wcsicmp(env, L"light") == 0) { g_themeMode = 1; ApplyTheme(); }
         }
     }
+    {
+        wchar_t lenv[16] = {};
+        if (GetEnvironmentVariableW(L"MEMSweep_LANG", lenv, 16)) {
+            g_zh.store(_wcsicmp(lenv, L"en") != 0, std::memory_order_relaxed);
+        }
+    }
     CreateFonts();
     {
         Snapshot snap;
@@ -3724,9 +3756,7 @@ int RenderUISnapshot(const std::wstring& path) {
     g_sheetT = 1.0f;
     g_gaugeShown = (float)s.m.loadPct;
     g_gaugeTarget = (float)s.m.loadPct;
-    s_auto = g_cfg.autoGuard; s_idleDeep = g_cfg.idleDeep;
-    s_hotkey = g_cfg.hotkey; s_eco = g_cfg.ecoQoS; s_silent = g_cfg.silent;
-    if (!HotkeySpec::Parse(g_cfg.hotkeyCombo, g_hkSpec)) g_hkSpec = HotkeySpec();
+    SyncFromConfig();
     {
         // 无头渲染录制态：MEMSweep_CAPTURE=1（配合 MEMSweep_SHEET=advanced）
         wchar_t cap[8] = {};
@@ -3735,8 +3765,6 @@ int RenderUISnapshot(const std::wstring& path) {
             g_hkLiveMods = MOD_CONTROL;
         }
     }
-    s_threshold = g_cfg.threshold; g_sliderValue = (float)g_cfg.threshold;
-    s_autostart = g_cfg.autostart;
     float scale = 1.0f;
     {
         wchar_t env[16] = {};
@@ -3880,6 +3908,7 @@ int RunUI(HINSTANCE hInst, bool showOnStart) {
         WaitForSingleObject(g_monThread, 2000);
         CloseHandle(g_monThread);
     }
+    RevertBackgroundTaming();
     if (g_edFont) DeleteObject(g_edFont);
     if (g_edBrush) DeleteObject(g_edBrush);
     TrayRemove();
