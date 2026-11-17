@@ -8,7 +8,7 @@
 #      Keep the file names: <id>.yaml, <id>.installer.yaml, <id>.locale.en-US.yaml.
 #   3. Validate before opening the PR:
 #        winget validate --manifest manifests/f/feiyu-labs/MemSweep/<version>
-#   4. PR title: "Add feiyu-labs.MemSweep version <version>".
+#   4. PR title: "New package: feiyu-labs.MemSweep version <version>" (or "Update: feiyu-labs.MemSweep to <version>").
 #      The pipeline downloads each release asset and checks its hash.
 # Notes:
 #   - Schema 1.28.0 is current; the repo rejects 1.6 and older.
@@ -24,7 +24,9 @@ $schema = '1.28.0'
 
 # Only project asset fields: the release body carries multi-language text,
 # and ConvertFrom-Json over the whole object is unreliable through the pipe.
-$assets = gh api "repos/$repo/releases/tags/$Tag" --jq ".assets | map({name: .name, url: .browser_download_url})" | ConvertFrom-Json
+$rel = gh api "repos/$repo/releases/tags/$Tag" --jq "{published_at: .published_at, assets: (.assets | map({name: .name, url: .browser_download_url}))}" | ConvertFrom-Json
+$assets = $rel.assets
+$releaseDate = ([datetime]$rel.published_at).ToUniversalTime().ToString('yyyy-MM-dd')
 $urlOf = { param($n) ($assets | Where-Object { $_.name -eq $n }).url }
 $x64url = & $urlOf "MemSweep-$Tag-x64.zip"
 $armurl = & $urlOf "MemSweep-$Tag-arm64.zip"
@@ -41,7 +43,7 @@ $dir = Join-Path $PSScriptRoot "manifests/f/feiyu-labs/MemSweep/$version"
 New-Item -ItemType Directory -Path $dir -Force | Out-Null
 
 function Write-Manifest([string]$name, [string]$text) {
-    $t = $text.Replace('__V__', $version)
+    $t = $text.Replace('__V__', $version).Replace('__DATE__', $releaseDate)
     $t = $t.Replace('__X64URL__', $x64url).Replace('__X64SHA__', $x64sha)
     $t = $t.Replace('__ARMURL__', $armurl).Replace('__ARMSHA__', $armsha)
     $t = $t.Replace('__RELURL__', "https://github.com/$repo/releases/tag/$Tag")
@@ -62,20 +64,20 @@ $installerYaml = @'
 # yaml-language-server: $schema=https://aka.ms/winget-manifest.installer.__SCHEMA__.schema.json
 PackageIdentifier: feiyu-labs.MemSweep
 PackageVersion: __V__
+InstallerType: zip
+NestedInstallerType: portable
+ElevationRequirement: elevationRequired
+ReleaseDate: __DATE__
 Installers:
   - Architecture: x64
-    InstallerType: zip
     InstallerUrl: __X64URL__
     InstallerSha256: __X64SHA__
-    NestedInstallerType: portable
     NestedInstallerFiles:
       - RelativeFilePath: MemSweep.exe
         PortableCommandAlias: memsweep
   - Architecture: arm64
-    InstallerType: zip
     InstallerUrl: __ARMURL__
     InstallerSha256: __ARMSHA__
-    NestedInstallerType: portable
     NestedInstallerFiles:
       - RelativeFilePath: MemSweep.exe
         PortableCommandAlias: memsweep
