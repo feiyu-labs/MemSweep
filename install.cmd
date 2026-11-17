@@ -24,6 +24,10 @@ if not exist "%SRC%" (
 )
 
 echo [install] 停止旧实例...
+if exist "%DST%\MemSweep.exe" (
+  "%DST%\MemSweep.exe" /exit >nul 2>&1
+  timeout /t 2 /nobreak >nul
+)
 taskkill /IM MemSweep.exe /F >nul 2>&1
 
 echo [install] 复制到 %DST% ...

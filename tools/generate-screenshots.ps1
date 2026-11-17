@@ -36,32 +36,35 @@ Write-Host "Rendering official MemSweep screenshots (150% DPI)..." -ForegroundCo
 
 # 只生成 README 实际引用的文件：尺寸与语言一一对应，仓库里不留没人用的图。
 
-# 1. Home screen: bilingual x dual theme
-RenderSnap "" "light" "zh" 1.5 "screenshot-home-light-zh.png"
-RenderSnap "" "dark"  "zh" 1.5 "screenshot-home-dark-zh.png"
-RenderSnap "" "light" "en" 1.5 "screenshot-home-light-en.png"
-RenderSnap "" "dark"  "en" 1.5 "screenshot-home-dark-en.png"
+try {
+    # 1. Home screen: bilingual x dual theme
+    RenderSnap "" "light" "zh" 1.5 "screenshot-home-light-zh.png"
+    RenderSnap "" "dark"  "zh" 1.5 "screenshot-home-dark-zh.png"
+    RenderSnap "" "light" "en" 1.5 "screenshot-home-light-en.png"
+    RenderSnap "" "dark"  "en" 1.5 "screenshot-home-dark-en.png"
 
-# 2. Sheets: Chinese
-RenderSnap "settings"  "light" "zh" 1.5 "screenshot-settings-zh.png"
-RenderSnap "processes" "light" "zh" 1.5 "screenshot-processes-zh.png"
+    # 2. Sheets: Chinese
+    RenderSnap "settings"  "light" "zh" 1.5 "screenshot-settings-zh.png"
+    RenderSnap "processes" "light" "zh" 1.5 "screenshot-processes-zh.png"
 
-# 3. Sheets: English
-RenderSnap "settings"  "light" "en" 1.5 "screenshot-settings-en.png"
-RenderSnap "processes" "light" "en" 1.5 "screenshot-processes-en.png"
+    # 3. Sheets: English
+    RenderSnap "settings"  "light" "en" 1.5 "screenshot-settings-en.png"
+    RenderSnap "processes" "light" "en" 1.5 "screenshot-processes-en.png"
 
-# 系统状态页需要管理员权限才读得到真实状态；非提权渲染会显示
-# “Run as administrator to see system status”，不能作为文档配图。
-# 在提权 PowerShell 里设置同样四个环境变量后运行 /uipng，再把 ui.png 拷到 docs：
-#   $env:MEMSweep_SHEET='system'; $env:MEMSweep_THEME='light'
-#   $env:MEMSweep_LANG='en'; $env:MEMSweep_DPISCALE='1.5'
-#   Start-Process .\dist\MemSweepDev.exe -ArgumentList '/uipng' -WindowStyle Hidden -Wait
-#   中英文各一次，分别覆盖 screenshot-system-en.png / screenshot-system-zh.png
+    # 系统状态页需要管理员权限才读得到真实状态；非提权渲染会显示
+    # “Run as administrator to see system status”，不能作为文档配图。
+    # 在提权 PowerShell 里设置同样四个环境变量后运行 /uipng，再把 ui.png 拷到 docs：
+    #   $env:MEMSweep_SHEET='system'; $env:MEMSweep_THEME='light'
+    #   $env:MEMSweep_LANG='en'; $env:MEMSweep_DPISCALE='1.5'
+    #   Start-Process .\dist\MemSweepDev.exe -ArgumentList '/uipng' -WindowStyle Hidden -Wait
+    #   中英文各一次，分别覆盖 screenshot-system-en.png / screenshot-system-zh.png
 
-# 4. Hotkey recording state (advanced sheet)
-$env:MEMSweep_CAPTURE = '1'
-RenderSnap "advanced" "light" "zh" 1.5 "screenshot-hotkey-zh.png"
-RenderSnap "advanced" "light" "en" 1.5 "screenshot-hotkey-en.png"
-Remove-Item Env:MEMSweep_CAPTURE -ErrorAction SilentlyContinue
+    # 4. Hotkey recording state (advanced sheet)
+    $env:MEMSweep_CAPTURE = '1'
+    RenderSnap "advanced" "light" "zh" 1.5 "screenshot-hotkey-zh.png"
+    RenderSnap "advanced" "light" "en" 1.5 "screenshot-hotkey-en.png"
 
-Write-Host "All screenshots generated successfully into $outDir!" -ForegroundColor Green
+    Write-Host "All screenshots generated successfully into $outDir!" -ForegroundColor Green
+} finally {
+    Remove-Item Env:MEMSweep_SHEET, Env:MEMSweep_THEME, Env:MEMSweep_LANG, Env:MEMSweep_DPISCALE, Env:MEMSweep_CAPTURE -ErrorAction SilentlyContinue
+}

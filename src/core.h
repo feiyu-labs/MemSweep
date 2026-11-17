@@ -14,7 +14,6 @@ struct Metrics {
     unsigned long long freeBytes = 0;      // 真正空闲（zero + free list）
     unsigned long long standbyBytes = 0;   // 待机缓存合计
     unsigned long long standbyByPrio[8] = {};
-    unsigned long long modifiedBytes = 0;
     unsigned long long commitUsed = 0;
     unsigned long long commitLimit = 0;
     unsigned long long hardFaultsCumulative = 0;
@@ -22,7 +21,6 @@ struct Metrics {
     // 压缩存储（SystemStoreInformation / MemCompressionInfoRequest）
     bool  compressionOk = false;
     unsigned long long compressedBytes = 0;    // 压缩后的物理占用
-    unsigned long long compressedLogical = 0;  // 去重后的逻辑数据
     double compressionRatio = 0.0;
     // 内核池
     unsigned long long nonpagedBytes = 0;
@@ -32,7 +30,7 @@ struct Metrics {
 
 struct ProcInfo {
     DWORD pid = 0, ppid = 0, sessionId = 0;
-    unsigned long long ws = 0, wsPrivate = 0, commit = 0, cpu100ns = 0, createTime = 0;
+    unsigned long long ws = 0, wsPrivate = 0, cpu100ns = 0, createTime = 0;
     std::wstring name;
 };
 
@@ -66,7 +64,6 @@ void  InitCore();
 void  EnablePrivileges();
 void  DisablePrivileges();
 bool  IsElevated();
-bool  IsCurrentSession(DWORD pid);
 void  RebuildWhitelist();
 void  PauseAutoGuard(int minutes);
 bool  AutoPaused();
@@ -100,7 +97,7 @@ bool ShouldTriggerAuto(const Config& c, const Metrics& m, ULONGLONG nowMs, ULONG
 // 自动计划：空闲后台修剪 + 条件性低优先级缓存清理；
 // 真实压力下才升级为“非空闲后台修剪 + 全量缓存”，绝不自动合并页。
 CleanPlan PlanAuto(const Config& c, const Metrics& m, bool hasCandidates);
-// 手动计划：全量待机 + 文件缓存 + 修剪（无空闲要求）+ 可选合并重复页
+// 手动计划：默认均衡（修剪 + 低优先级缓存 + 文件缓存）；深度时全量待机并合并重复页
 CleanPlan PlanManual(const Config& c);
 // 离开时维护：只处理空闲后台 + 低优先级缓存 + 合并页；不清全量缓存/文件缓存
 CleanPlan PlanIdle(const Config& c);
@@ -140,7 +137,8 @@ struct CleanResult {
     unsigned long long durationMs = 0;
 };
 
-void RunClean(const CleanPlan& plan, const Config& c, CleanResult& out, HANDLE cancel = nullptr);
+void RunClean(const CleanPlan& plan, const Config& c, CleanResult& out, HANDLE cancel = nullptr,
+              const Snapshot* initialSnap = nullptr);
 void LogCleanResult(const wchar_t* mode, size_t candidates, const CleanResult& r);
 bool StartCleanAsync(bool isAuto);
 void RequestManualClean(bool dryRun = false);

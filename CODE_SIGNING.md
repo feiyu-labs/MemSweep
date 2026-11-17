@@ -1,15 +1,14 @@
 # Code Signing Policy
 
-**状态：筹备中。** MemSweep 计划通过 [SignPath Foundation](https://signpath.org)
-获取面向开源项目的免费代码签名（当前 Release 为未签名构建，SHA256 见 Release 说明）。
+**Status: in preparation.** MemSweep plans to apply for free open-source code signing through [SignPath Foundation](https://signpath.org). Current releases are unsigned; verify downloads against the published `.sha256` files.
 
-计划内容：
+## Planned setup
 
-- 免费签名由 SignPath.io 提供，证书由 SignPath Foundation 签发。
-- 只签名由本仓库 CI（GitHub Actions）构建的产物；任何本地构建不签名。
-- 发布签名需维护者手动批准（SignPath Approver 角色 = 仓库 Owner）。
-- 隐私声明：本程序不会向任何网络系统传输数据，除非用户主动请求
-  （程序本身无网络代码，可用 `src/` 源码与构建脚本复核）。
+- Free code signing is provided by SignPath.io using a certificate from the SignPath Foundation.
+- Only artifacts built by this repository's GitHub Actions workflow are signed; local builds are never signed.
+- Every signed release requires manual approval from the repository owner (SignPath Approver role).
+- Privacy notice: MemSweep does not transfer any information to external systems unless explicitly requested by the user. The application contains no network code, which you can verify in `src/` and the workflow files.
 
-提交申请前需满足 SignPath 条件：公开仓库、OSI 许可证（MIT）、已有发布、
-双因素认证、自动化构建——本项目按此准备。
+## 中文摘要
+
+代码签名正在筹备中。MemSweep 计划通过 SignPath Foundation 为开源项目申请免费代码签名；当前发布包尚未签名，请使用发布页提供的 `.sha256` 文件核对校验值。正式接入后，只有 GitHub Actions 构建的产物会在维护者手动批准后签名，本地构建不签名。本程序不含任何网络代码，不会向外发送数据。

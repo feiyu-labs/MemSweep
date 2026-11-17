@@ -270,7 +270,6 @@ static void InitThemeFromConfig() {
 #include <imm.h>
 
 struct SysState {
-    bool loaded = false;
     bool compression = false, pageCombining = false, prelaunch = false, mmOk = false;
     bool sysmainRunning = false, fastStartupOn = false, wslEnabled = false;
     std::wstring pagingFiles = L"";
@@ -286,6 +285,26 @@ struct SysState {
 static SysState g_sys;
 static SRWLOCK g_sysLock = SRWLOCK_INIT;
 static volatile LONG g_sysLoading = 0;
+
+static void SysPageFileFlags(const SysState& s, bool& pfSystemManaged, bool& pfMissing, bool& pfTooSmall) {
+    pfSystemManaged = !s.pfPath.empty() && s.pfInitMB <= 0 && s.pfMaxMB <= 0;
+    pfMissing = s.pfPath.empty() && s.pfAllocMB == 0;
+    pfTooSmall = !pfSystemManaged && s.pfMaxMB > 0 && s.pfMaxMB < 8192 && s.commitPct > 90.0;
+}
+
+// 首页「系统状态」卡片与 System Sheet 共用同一套告警口径，避免首页显示正常而点进去报关注项。
+static int CountSysWarnings(const SysState& s) {
+    int w = 0;
+    if (s.mmOk && !s.compression) w++;
+    if (s.mmOk && !s.pageCombining) w++;
+    if (!s.sysmainRunning) w++;
+    bool pfSystemManaged = false, pfMissing = false, pfTooSmall = false;
+    SysPageFileFlags(s, pfSystemManaged, pfMissing, pfTooSmall);
+    if (pfMissing || pfTooSmall) w++;
+    if (s.commitPct > 90.0) w++;
+    if (s.nonpaged > 1024ULL * MB) w++;
+    return w;
+}
 
 // 布局（96dpi 基准，绘制时按 dpi 缩放后的实际像素）
 struct Layout {
@@ -521,11 +540,13 @@ struct StatCache {
 // 绘制缓存（避免动画期间每秒复制整份进程快照）
 static Snapshot g_drawSnap;
 static bool g_drawDirty = true;
+static bool g_procListDirty = true;
 // 双缓冲
 static Bitmap* g_back = nullptr;
 static Graphics* g_backG = nullptr;
 static int g_backW = 0, g_backH = 0;
 static ULONGLONG g_hiddenAt = 0;
+static HWINEVENTHOOK g_fgHook = nullptr;
 
 static ULONG_PTR g_gdiToken = 0;
 static void InitGdiplus() {
@@ -549,6 +570,16 @@ static bool AnimationsEnabled();
 static int GetEncoderClsid(const WCHAR* format, CLSID* pClsid);
 static void DestroyGdiObjects();
 static void ReleaseBackBuffer();
+static void ShowToast(const std::wstring& msg) {
+    g_toast = msg;
+    g_lastToastMs = GetTickCount64();
+    KickAnim();
+}
+static void PostToast(const std::wstring& msg) {
+    if (!g_hwnd) return;
+    auto* s = new std::wstring(msg);
+    if (!PostMessageW(g_hwnd, WM_APP_TOAST, 0, (LPARAM)s)) delete s;
+}
 
 // ---------------------------------------------------------------------------
 // 托盘
@@ -861,6 +892,8 @@ static void SyncFromConfig() {
 // 热键的唯一注册入口：先注销，再注册新的；失败时回滚到旧组合。
 // 任何地方都不要直接调用 RegisterHotKey，否则失败后会留下“热键消失”的状态。
 static void KickAnim();
+static void KickAnim();
+static void RebuildEditFont(float dpi);
 static std::wstring EditText(HWND h);   // 定义在绘制区，配置提交先用
 static bool RegisterHotkeyRaw(const HotkeySpec& s) {
     return RegisterHotKey(g_hwnd, HOTKEY_ID, s.mods | MOD_NOREPEAT, s.vk) != FALSE;
@@ -1228,6 +1261,7 @@ static void DrawHomeCard(Graphics& g, const RectF& r, int id,
            f11, subColor);
 }
 
+__attribute__((noinline))
 static void DrawHome(Graphics& g) {
     const Metrics& m = g_drawSnap.m;
     bool cleaning = g_cleaning != 0;
@@ -1258,23 +1292,23 @@ static void DrawHome(Graphics& g) {
         tc = T.accent;
     } else if (cleaning) {
         title = L"正在清理"; titleEn = L"Cleaning";
-        sub = L"前台与焦点进程不会被触碰"; subEn = L"The app you're using stays untouched";
+        sub = L"你正在用的程序不会受影响"; subEn = L"The app you're using stays untouched";
         tc = T.accent;
     } else if (paused) {
         title = L"自动清理已暂停"; titleEn = L"Auto clean paused";
-        sub = L"在托盘菜单中恢复自动清理"; subEn = L"Resume from the tray menu";
+        sub = L"可在托盘菜单中恢复"; subEn = L"Resume from the tray menu";
         tc = T.warn;
     } else if (g_gameMode.load(std::memory_order_relaxed)) {
-        title = L"全屏/演示模式"; titleEn = L"Fullscreen / presenting";
-        sub = L"自动清理已暂停，不打扰当前应用"; subEn = L"Auto clean paused to protect the foreground";
+        title = L"全屏或演示模式"; titleEn = L"Fullscreen or presenting";
+        sub = L"自动清理已暂停，避免打扰当前画面"; subEn = L"Auto clean paused so it won't interrupt";
         tc = T.text2;
     } else if (m.loadPct >= 90) {
         title = L"内存紧张"; titleEn = L"Memory is tight";
-        sub = L"建议立即清理后台进程"; subEn = L"Clean background apps now";
+        sub = L"可以立即清理闲置后台应用"; subEn = L"Clean background apps now";
         tc = T.danger;
     } else if (m.loadPct >= 80) {
         title = L"内存偏高"; titleEn = L"Memory is high";
-        sub = L"建议清理后台进程"; subEn = L"Clean background apps";
+        sub = L"可以清理闲置后台应用"; subEn = L"Clean background apps";
         tc = T.warn;
     }
     TextAt(g, Tx(title, titleEn), L.statusTitle, f20b, tc);
@@ -1397,10 +1431,10 @@ static void DrawHome(Graphics& g) {
     TextAt(g, Tx(L"自动清理", L"Auto clean"), RectF(L.autoRow.X, L.autoRow.Y + 1,
            L.autoRow.Width - 58, 19), f12, T.text);
     {
-        wchar_t sub2[64];
-        swprintf(sub2, 64, s_auto ? Tx(L"已开启 · 高于 %d%% 时清理闲置后台应用",
-                                       L"On · frees idle background apps above %d%%")
-                                  : Tx(L"已关闭 · 不自动清理", L"Off · no automatic cleaning"), s_threshold);
+        wchar_t sub2[80];
+        swprintf(sub2, 80, s_auto ? Tx(L"已开启 · 高于 %d%% 时清理闲置后台应用",
+                                       L"On · cleans idle background apps above %d%%")
+                                  : Tx(L"已关闭 · 不自动清理", L"Off · automatic cleaning is off"), s_threshold);
         TextAt(g, sub2, RectF(L.autoRow.X, L.autoRow.Y + 20, L.autoRow.Width - 58, 15), f11, T.text3);
     }
     DrawSwitch(g, L.autoRow, s_auto, ToggleValue(ID_TG_AUTO, s_auto));
@@ -1418,17 +1452,17 @@ static void DrawHome(Graphics& g) {
         unsigned long long freedShown = g_lastFreeGain.load() > g_lastAvailGain.load()
                                       ? g_lastFreeGain.load() : g_lastAvailGain.load();
         if (freedShown >= 16ULL * MB)
-            swprintf(gain, 64, Tx(L"释放 %s", L"freed %s"), FormatBytes(freedShown).c_str());
+            swprintf(gain, 64, Tx(L"已释放 %s", L"freed %s"), FormatBytes(freedShown).c_str());
         // 自动与手动的来源要写清楚：只写“上次清理”会让人以为是自己点的那次
         const bool wasAuto = g_lastCleanWasAuto.load(std::memory_order_relaxed);
         if (gain[0])
-            swprintf(last, 256, wasAuto ? Tx(L"上次自动清理 %s · %s", L"last auto clean %s · %s")
-                                        : Tx(L"上次清理 %s · %s", L"last clean %s · %s"), when, gain);
+            swprintf(last, 256, wasAuto ? Tx(L"上次自动清理 %s · %s", L"Last auto clean %s · %s")
+                                        : Tx(L"上次清理 %s · %s", L"Last clean %s · %s"), when, gain);
         else
-            swprintf(last, 256, wasAuto ? Tx(L"上次自动清理 %s", L"last auto clean %s")
-                                        : Tx(L"上次清理 %s", L"last clean %s"), when);
+            swprintf(last, 256, wasAuto ? Tx(L"上次自动清理 %s", L"Last auto clean %s")
+                                        : Tx(L"上次清理 %s", L"Last clean %s"), when);
     } else {
-        wcscpy(last, Tx(L"尚未清理", L"not cleaned yet"));
+        wcscpy(last, Tx(L"尚未清理", L"Not cleaned yet"));
     }
     TextAt(g, last, L.lastClean, f11, T.text3);
 
@@ -1452,19 +1486,16 @@ static void DrawHome(Graphics& g) {
     Color sysColor = T.text3;
     {
         AcquireSRWLockShared(&g_sysLock);
-        bool mc = g_sys.compression;
-        bool pc = g_sys.pageCombining;
-        bool sm = g_sys.sysmainRunning;
         bool mm = g_sys.mmOk;
+        int n = mm ? CountSysWarnings(g_sys) : 0;
         ReleaseSRWLockShared(&g_sysLock);
 
         if (!mm) {
             sysDesc = Tx(L"点击查看状态", L"Click to inspect");
-        } else if (!mc || !sm || !pc) {
-            const int n = (mc ? 0 : 1) + (sm ? 0 : 1) + (pc ? 0 : 1);
+        } else if (n > 0) {
             wchar_t sd[64] = {};
-            swprintf(sd, 64, n == 1 ? Tx(L"建议优化 %d 项", L"%d recommendation")
-                                    : Tx(L"建议优化 %d 项", L"%d recommendations"), n);
+            swprintf(sd, 64, n == 1 ? Tx(L"%d 项需关注", L"%d item needs attention")
+                                    : Tx(L"%d 项需关注", L"%d items need attention"), n);
             sysDesc = sd;
             sysColor = T.warn;
         } else {
@@ -1547,6 +1578,7 @@ static void BuildProcessRows() {
         if (a.ws != b.ws) return a.ws > b.ws;
         return a.name < b.name;
     });
+    g_procListDirty = false;
 }
 
 static void CommitWhitelist(std::vector<std::wstring> v) {
@@ -1555,6 +1587,7 @@ static void CommitWhitelist(std::vector<std::wstring> v) {
     g_wlDraft = joined;
     bool saved = SaveConfig();
     RebuildWhitelist();
+    g_procListDirty = true;
     if (g_edWL) SetWindowTextW(g_edWL, joined.c_str());
     if (saved) g_savedAt = GetTickCount64();
     else {
@@ -1576,12 +1609,13 @@ static void ToggleProtected(const std::wstring& name) {
     CommitWhitelist(std::move(v));
 }
 
+__attribute__((noinline))
 static void DrawProcessSheet(Graphics& g) {
     DrawSheetFrame(g, L"进程", L"Processes", g_procFromSettings);
     RefreshDrawSnap();
-    BuildProcessRows();
-    TextAt(g, Tx(L"点击右侧「保护」，清理时跳过该应用——不释放它的内存",
-                 L"Click Protect to skip this app when cleaning — its memory is left alone"),
+    if (g_procListDirty) BuildProcessRows();
+    TextAt(g, Tx(L"点击右侧「保护」可跳过该应用，不清理它的内存",
+                 L"Click under Protect to skip an app when cleaning"),
            L.procSub, f11, T.text3);
     TextAt(g, Tx(L"应用", L"App"), RectF(L.procHeader.X, L.procHeader.Y, 120, 14), f11, T.text3);
     TextAt(g, Tx(L"内存", L"Memory"), RectF(L.procHeader.GetRight() - 142, L.procHeader.Y, 80, 14),
@@ -1636,19 +1670,21 @@ static void DrawProcessSheet(Graphics& g) {
         FillRound(g, RectF(L.sheet.GetRight() - 14, top, 3, h), 1.5f, T.track);
         FillRound(g, RectF(L.sheet.GetRight() - 14, ty, 3, th), 1.5f, T.text3);
     }
-    TextAt(g, Tx(L"右键释放内存 · 滚轮浏览 · 系统与虚拟机始终保护",
-                 L"Right-click to free · scroll · system/VM always protected"),
+    TextAt(g, Tx(L"右键释放内存 · 滚轮浏览 · 系统与虚拟机始终受保护",
+                 L"Right-click to free · scroll · system and VM apps are always protected"),
            L.procHint, f11, T.text3);
 }
 
+__attribute__((noinline))
 static void DrawSettingsSheet(Graphics& g) {
     DrawSheetFrame(g, L"设置", L"Settings", false);
     wchar_t autoSubZh[80] = {}, autoSubEn[80] = {};
     const wchar_t* autoSubZ = L"已关闭 · 不自动清理";
-    const wchar_t* autoSubE = L"Off · no automatic cleaning";
+    const wchar_t* autoSubE = L"Off · automatic cleaning is off";
     if (s_auto) {
-        swprintf(autoSubZh, 80, L"已开启 · 高于 %d%% 时清理闲置后台应用", (int)g_sliderValue);
-        swprintf(autoSubEn, 80, L"On · frees idle background apps above %d%%", (int)g_sliderValue);
+        const int th = (int)(g_sliderValue + 0.5f);
+        swprintf(autoSubZh, 80, L"已开启 · 高于 %d%% 时清理闲置后台应用", th);
+        swprintf(autoSubEn, 80, L"On · cleans idle background apps above %d%%", th);
         autoSubZ = autoSubZh;
         autoSubE = autoSubEn;
     }
@@ -1670,12 +1706,12 @@ static void DrawSettingsSheet(Graphics& g) {
     const wchar_t* strZh[3] = { L"温和", L"均衡", L"深度" };
     const wchar_t* strEn[3] = { L"Mild", L"Balanced", L"Deep" };
     DrawSeg(g, L.setStrengthSeg, strZh, strEn, 3, g_strength);
-    const wchar_t* hintZh = g_strength == 0 ? L"只清理空闲后台，切回应用不受影响"
-                          : g_strength == 1 ? L"推荐：释放与流畅兼顾"
-                                            : L"释放更多并合并内存页，应用切回会稍慢";
-    const wchar_t* hintEn = g_strength == 0 ? L"Only idle apps · switching back is unaffected"
-                          : g_strength == 1 ? L"Recommended · balanced"
-                                            : L"Frees more and merges pages; apps reload slower";
+    const wchar_t* hintZh = g_strength == 0 ? L"只清理闲置后台，切回常用应用不受影响"
+                          : g_strength == 1 ? L"推荐 · 兼顾释放空间与日常流畅"
+                                            : L"释放更多并合并内存页，切回后台应用会稍慢";
+    const wchar_t* hintEn = g_strength == 0 ? L"Only idle apps; switching back stays instant"
+                          : g_strength == 1 ? L"Recommended · balances freed memory and responsiveness"
+                                            : L"Frees more and merges pages; background apps reload slower";
     TextAt(g, Tx(hintZh, hintEn), L.setStrengthHint, f11, T.text3);
 
     TextAt(g, Tx(L"保护名单", L"Protected list"), L.setWlLbl, f12, T.text2);
@@ -1692,7 +1728,7 @@ static void DrawSettingsSheet(Graphics& g) {
     DrawSwitchRow(g, L.setSilentRow, L"静默模式", L"Silent mode", s_silent,
                   ToggleValue(ID_TG_SILENT, s_silent),
                   s_silent ? Tx(L"已开启 · 不弹完成通知", L"On · no notifications")
-                           : Tx(L"已关闭 · 清理完成后通知", L"Off · notify when a clean finishes"));
+                           : Tx(L"已关闭 · 清理完成后通知", L"Off · notifies when a clean finishes"));
 
     bool aboutHover = g_hover == ID_SET_ABOUT;
     FillRound(g, L.setAboutLink, 8, aboutHover ? T.trackFill : C(0, 0, 0, 0));
@@ -1738,19 +1774,21 @@ static void DrawAdvancedHotkeyRow(Graphics& g) {
     DrawSwitch(g, row, s_hotkey, ToggleValue(ID_TG_HOTKEY, s_hotkey));
 
     const wchar_t* subZh = L"点击后按下新组合键";
-    const wchar_t* subEn = L"Click, then press the new keys";
+    const wchar_t* subEn = L"Click, then press a new shortcut";
     Color subColor = T.text3;
     switch (g_hkErr) {
-    case 1: subZh = L"需要包含 Ctrl、Alt、Shift 或 Win"; subEn = L"Add Ctrl, Alt, Shift or Win"; subColor = T.danger; break;
+    case 1: subZh = L"需要包含 Ctrl、Alt、Shift 或 Win"; subEn = L"Include Ctrl, Alt, Shift, or Win"; subColor = T.danger; break;
     case 2: subZh = L"与 MemSweep 自己的快捷键冲突"; subEn = L"Clashes with a MemSweep shortcut"; subColor = T.danger; break;
     case 3: subZh = L"已被系统或其他程序占用"; subEn = L"Already used by Windows or another app"; subColor = T.danger; break;
     default:
         if (g_hkCapture) { subZh = L"按 Esc 取消"; subEn = L"Esc to cancel"; subColor = T.accent; }
         break;
     }
-    TextAt(g, Tx(subZh, subEn), RectF(row.X, row.Y + 21, row.Width - 58, 15), f11, subColor);
+    TextAt(g, Tx(subZh, subEn), RectF(row.X, row.Y + 21, row.Width - 58, 15),
+           f11, subColor, StringAlignmentNear, StringAlignmentCenter, true);
 }
 
+__attribute__((noinline))
 static void DrawAdvancedSheet(Graphics& g) {
     DrawSheetFrame(g, L"高级设置", L"Advanced", true);
     TextAt(g, Tx(L"只清理占用大于", L"Only clean apps over"), L.advMinLbl, f12, T.text2);
@@ -1770,10 +1808,10 @@ static void DrawAdvancedSheet(Graphics& g) {
     if (g_cfg.idleDeepSecs >= 60) {
         int m = g_cfg.idleDeepSecs / 60;
         swprintf(idleSubZh, 128, L"空闲 %d 分钟后自动清理并合并内存页，返回即中止", m);
-        swprintf(idleSubEn, 128, L"Cleans and merges pages after %dm idle; stops when you're back", m);
+        swprintf(idleSubEn, 128, L"Cleans and merges pages after %dm away; stops when you're back", m);
     } else {
         swprintf(idleSubZh, 128, L"空闲 %d 秒后自动清理并合并内存页，返回即中止", g_cfg.idleDeepSecs);
-        swprintf(idleSubEn, 128, L"Cleans and merges pages after %ds idle; stops when you're back", g_cfg.idleDeepSecs);
+        swprintf(idleSubEn, 128, L"Cleans and merges pages after %ds away; stops when you're back", g_cfg.idleDeepSecs);
     }
     DrawSwitchRow(g, L.advIdleDeepRow, L"离开时自动清理", L"Clean when away", s_idleDeep,
                   ToggleValue(ID_TG_IDLE_DEEP, s_idleDeep), idleSubZh, idleSubEn);
@@ -1783,11 +1821,14 @@ static void OpenUrl(const wchar_t* url) {
     ShellExecuteW(nullptr, L"open", url, nullptr, nullptr, SW_SHOWNORMAL);
 }
 
+__attribute__((noinline))
 static void DrawAboutSheet(Graphics& g) {
     DrawSheetFrame(g, L"关于", L"About", false);
     DrawBrandMark(g, L.aboutLogo);
     TextAt(g, L"MemSweep", L.aboutTitle, f20b, T.text, StringAlignmentCenter);
-#ifdef _WIN64
+#if defined(_M_ARM64) || defined(__aarch64__)
+    const wchar_t* arch = L"ARM64";
+#elif defined(_WIN64)
     const wchar_t* arch = L"x64";
 #else
     const wchar_t* arch = L"x86";
@@ -1796,7 +1837,7 @@ static void DrawAboutSheet(Graphics& g) {
     swprintf(ver, 64, L"v%s · %s", MEMSWEEP_VERSION, arch);
     TextAt(g, ver, L.aboutVer, f11, T.text3, StringAlignmentCenter);
     TextAt(g, Tx(L"常驻托盘、占用很小的 Windows 内存清理工具",
-                 L"A small Windows memory cleaner that stays in the tray"),
+                 L"A tiny Windows memory cleaner that stays in the tray"),
            L.aboutDesc, f12, T.text2, StringAlignmentCenter);
 
     const wchar_t* rowZh[3] = { L"GitHub 仓库", L"问题反馈", L"最新版本" };
@@ -1810,7 +1851,7 @@ static void DrawAboutSheet(Graphics& g) {
         TextAt(g, L"›", RectF(L.aboutRows[i].GetRight() - 26, L.aboutRows[i].Y, 16,
                L.aboutRows[i].Height), f15b, T.text3, StringAlignmentFar);
     }
-    TextAt(g, Tx(L"MIT License · 不联网 · 不收集数据 · © 2026 feiyu-labs",
+    TextAt(g, Tx(L"MIT 许可 · 不联网 · 不收集数据 · © 2026 feiyu-labs",
                  L"MIT License · no network · no telemetry · © 2026 feiyu-labs"),
            L.aboutFoot, f11, T.text3, StringAlignmentCenter);
 }
@@ -1848,6 +1889,7 @@ static void RefreshDrawSnap() {
     std::swap(g_drawSnap, g_snap);
     LeaveCriticalSection(&g_lock);
     g_drawDirty = false;
+    g_procListDirty = true;
 }
 
 static void DrawAll(Graphics& g, const RectF* clip) {
@@ -2046,8 +2088,8 @@ static void BringMainToFront() {
         Balloon(Tx(L"面板已打开；若被全屏游戏遮挡，请按 Alt+Tab 切换",
                    L"Panel opened; if hidden by a fullscreen game, press Alt+Tab"));
 }
-static void ToggleAnimStart(int id) {
-    if (!g_anim.count(id)) g_anim[id] = 0.0f;
+static void ToggleAnimStart(int id, bool prevOn) {
+    if (!g_anim.count(id)) g_anim[id] = prevOn ? 1.0f : 0.0f;
     if (g_hwnd) SetTimer(g_hwnd, 2, 33, nullptr);
 }
 static bool AnimationsEnabled() {
@@ -2074,7 +2116,7 @@ static void OpenSheet(Sheet s) {
     g_sheetStart = GetTickCount64();
     g_sheetAnimating = g_sheetT < 1.0f;
     g_systemExpanded = false;
-    if (s == Sheet::Processes) { RefreshDrawSnap(); g_procScroll = 0; BuildProcessRows(); }
+    if (s == Sheet::Processes) { RefreshDrawSnap(); g_procScroll = 0; g_procListDirty = true; BuildProcessRows(); }
     if (s == Sheet::Settings && g_edWL) {
         SetWindowTextW(g_edWL, g_cfg.whitelist.c_str());
         g_wlDraft = g_cfg.whitelist;
@@ -2139,7 +2181,7 @@ static void Activate(CtlId id) {
         KickAnim();
         break;
     case ID_BTN_SETTINGS:
-        if (g_sheet == Sheet::Settings) CloseSheet();
+        if (g_sheet == Sheet::Settings) { CommitSettings(); CloseSheet(); }
         else OpenSheet(Sheet::Settings);
         break;
     case ID_SHEET_CLOSE:
@@ -2196,25 +2238,27 @@ static void Activate(CtlId id) {
         if (g_themeMode == 0) g_themeMode = g_dark ? 1 : 2;
         else g_themeMode = (g_themeMode == 1) ? 2 : 1;
         g_cfg.theme = (g_themeMode == 1) ? L"light" : L"dark";
-        SaveConfig();
+        bool saved = SaveConfig();
         ApplyTheme();
-        g_toast = (g_themeMode == 1) ? Tx(L"已切换浅色主题", L"Light theme on")
-                                     : Tx(L"已切换深色主题", L"Dark theme on");
-        g_lastToastMs = GetTickCount64();
-        KickAnim();
+        ShowToast(saved ? ((g_themeMode == 1) ? Tx(L"已切换浅色主题", L"Light theme on")
+                                              : Tx(L"已切换深色主题", L"Dark theme on"))
+                        : Tx(L"设置未能保存，请检查磁盘空间或文件权限",
+                             L"Settings couldn't be saved; check disk space or file permissions"));
         break;
     }
     case ID_BTN_LANG: {
         g_zh.store(!g_zh.load(std::memory_order_relaxed), std::memory_order_relaxed);
         g_cfg.lang = g_zh.load(std::memory_order_relaxed) ? L"zh" : L"en";
-        SaveConfig();
+        bool saved = SaveConfig();
         CreateFonts();
+        RebuildEditFont(L.dpi);
         RECT rc{}; GetClientRect(g_hwnd, &rc);
         BuildLayout((float)rc.right, (float)rc.bottom, L.dpi);
         PositionEdits();
         UpdateWhitelistCue();
-        g_toast = Tx(L"已切换中文界面", L"Switched to English");
-        g_lastToastMs = GetTickCount64();
+        ShowToast(saved ? Tx(L"已切换中文界面", L"Switched to English")
+                        : Tx(L"设置未能保存，请检查磁盘空间或文件权限",
+                             L"Settings couldn't be saved; check disk space or file permissions"));
         InvalidateRect(g_hwnd, nullptr, FALSE);
         break;
     }
@@ -2228,24 +2272,53 @@ static void Activate(CtlId id) {
         }
         break;
     }
-    case ID_TG_AUTO:
+    case ID_TG_AUTO: {
+        bool prev = s_auto;
         s_auto = !s_auto;
-        ToggleAnimStart(ID_TG_AUTO);
+        ToggleAnimStart(ID_TG_AUTO, prev);
         CommitSettings();
         break;
+    }
     case ID_HK_CHIP: StartHotkeyCapture(); break;
-    case ID_TG_HOTKEY: s_hotkey = !s_hotkey; ToggleAnimStart(ID_TG_HOTKEY); CommitSettings(); break;
-    case ID_TG_ECO: s_eco = !s_eco; ToggleAnimStart(ID_TG_ECO); CommitSettings(); break;
-    case ID_TG_SILENT: s_silent = !s_silent; ToggleAnimStart(ID_TG_SILENT); CommitSettings(); break;
-    case ID_TG_IDLE_DEEP: s_idleDeep = !s_idleDeep; ToggleAnimStart(ID_TG_IDLE_DEEP); CommitSettings(); break;
+    case ID_TG_HOTKEY: {
+        bool prev = s_hotkey;
+        s_hotkey = !s_hotkey;
+        ToggleAnimStart(ID_TG_HOTKEY, prev);
+        CommitSettings();
+        break;
+    }
+    case ID_TG_ECO: {
+        bool prev = s_eco;
+        s_eco = !s_eco;
+        ToggleAnimStart(ID_TG_ECO, prev);
+        CommitSettings();
+        break;
+    }
+    case ID_TG_SILENT: {
+        bool prev = s_silent;
+        s_silent = !s_silent;
+        ToggleAnimStart(ID_TG_SILENT, prev);
+        CommitSettings();
+        break;
+    }
+    case ID_TG_IDLE_DEEP: {
+        bool prev = s_idleDeep;
+        s_idleDeep = !s_idleDeep;
+        ToggleAnimStart(ID_TG_IDLE_DEEP, prev);
+        CommitSettings();
+        break;
+    }
     case ID_TG_AUTOSTART: {
-        bool want = !s_autostart;
+        bool prev = s_autostart;
+        bool want = !prev;
         s_autostart = want;
         g_cfg.autostart = want;
         bool saved = SaveConfig();
-        ToggleAnimStart(ID_TG_AUTOSTART);
+        ToggleAnimStart(ID_TG_AUTOSTART, prev);
         SetAutostartAsync(want);
         if (saved) g_savedAt = GetTickCount64();
+        else ShowToast(Tx(L"设置未能保存，请检查磁盘空间或文件权限",
+                          L"Settings couldn't be saved; check disk space or file permissions"));
         break;
     }
     default: break;
@@ -2336,10 +2409,9 @@ static void ShowProcMenu(int row) {
     PostMessageW(g_hwnd, WM_NULL, 0, 0);
     if (cmd == 1) {
         bool ok = TrimPid(pid);
-        g_toast = ok ? (Tx(L"已释放 ", L"Freed ") + display + L" · " + FormatBytes(ws))
-                     : (Tx(L"释放失败：", L"Couldn't free: ") + display);
-        g_lastToastMs = GetTickCount64();
-        KickAnim();
+        if (ok && g_monEvent) SetEvent(g_monEvent);
+        ShowToast(ok ? (Tx(L"已释放 ", L"Freed ") + display + L" · " + FormatBytes(ws))
+                     : (Tx(L"释放失败：", L"Couldn't free: ") + display));
     }
 }
 
@@ -2366,20 +2438,36 @@ static void ShowTrayMenu(int x, int y) {
     PostMessageW(g_hwnd, WM_NULL, 0, 0);
     switch (cmd) {
     case 1: RequestManualClean(false); break;
-    case 2: g_cfg.autoGuard = !g_cfg.autoGuard; s_auto = g_cfg.autoGuard; SaveConfig();
-            ToggleAnimStart(ID_TG_AUTO); InvalidateRect(g_hwnd, nullptr, FALSE); break;
+    case 2: {
+        bool prev = s_auto;
+        g_cfg.autoGuard = !g_cfg.autoGuard;
+        s_auto = g_cfg.autoGuard;
+        SaveConfig();
+        ToggleAnimStart(ID_TG_AUTO, prev);
+        InvalidateRect(g_hwnd, nullptr, FALSE);
+        break;
+    }
     case 3: BringMainToFront(); break;
-    case 4: { bool want = !s_autostartInstalled; s_autostart = want; g_cfg.autostart = want; SaveConfig(); SetAutostartAsync(want); InvalidateRect(g_hwnd, nullptr, FALSE); break; }
+    case 4: {
+        bool prev = s_autostart;
+        bool want = !s_autostartInstalled;
+        s_autostart = want;
+        g_cfg.autostart = want;
+        SaveConfig();
+        ToggleAnimStart(ID_TG_AUTOSTART, prev);
+        SetAutostartAsync(want);
+        InvalidateRect(g_hwnd, nullptr, FALSE);
+        break;
+    }
     case 5: ShellExecuteW(nullptr, L"open", LogPath().c_str(), nullptr, nullptr, SW_SHOWNORMAL); break;
     case 6: PostMessageW(g_hwnd, WM_APP_EXIT, 0, 0); break;
     case 7: ShowSystemCheck(); break;
     case 10: BringMainToFront(); OpenSheet(Sheet::About); break;
     case 9: StartCombine(true); break;
     case 8: PauseAutoGuard(AutoPaused() ? 0 : 60);
-            g_toast = AutoPaused() ? Tx(L"自动清理已暂停 1 小时", L"Auto clean paused 1h")
-                                   : Tx(L"自动清理已恢复", L"Auto clean resumed");
-            g_lastToastMs = GetTickCount64();
-            KickAnim(); break;
+            ShowToast(AutoPaused() ? Tx(L"自动清理已暂停 1 小时", L"Auto clean paused 1h")
+                                   : Tx(L"自动清理已恢复", L"Auto clean resumed"));
+            break;
     default: break;
     }
 }
@@ -2387,6 +2475,15 @@ static void ShowTrayMenu(int x, int y) {
 // ---------------------------------------------------------------------------
 // 窗口过程
 // ---------------------------------------------------------------------------
+static void RebuildEditFont(float dpi) {
+    if (g_edFont) DeleteObject(g_edFont);
+    g_edFont = CreateFontW(-MulDiv(10, (int)(96 * dpi), 72), 0, 0, 0, FW_NORMAL, 0, 0, 0,
+                           DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
+                           CLEARTYPE_QUALITY, DEFAULT_PITCH, FontFamily().c_str());
+    for (HWND e : { g_edWL })
+        if (e) SendMessageW(e, WM_SETFONT, (WPARAM)g_edFont, TRUE);
+}
+
 static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     switch (msg) {
     case WM_CREATE: {
@@ -2395,18 +2492,15 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         ApplyTheme();   // 创建主题画刷、DWM 深色、菜单主题
         ImmAssociateContextEx(hwnd, nullptr, 0);   // 本窗口不需要中文输入，避免 IME/TSF 注入
         // 编辑框
-        g_edFont = CreateFontW(-MulDiv(10, (int)(96 * L.dpi), 72), 0, 0, 0, FW_NORMAL, 0, 0, 0,
-                               DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
-                               CLEARTYPE_QUALITY, DEFAULT_PITCH, FontFamily().c_str());
         auto mkEdit = [&](DWORD style) {
             HWND h = CreateWindowExW(0, L"Edit", L"",
                                      WS_CHILD | WS_VISIBLE | ES_AUTOHSCROLL | style,
                                      0, 0, 10, 10, hwnd, nullptr, g_inst, nullptr);
-            SendMessageW(h, WM_SETFONT, (WPARAM)g_edFont, TRUE);
             ImmAssociateContextEx(h, nullptr, 0);
             return h;
         };
         g_edWL = mkEdit(0);
+        RebuildEditFont(L.dpi);
         SendMessageW(g_edWL, EM_SETLIMITTEXT, 8191, 0);   // 名单很长时不静默截断
         UpdateWhitelistCue();
         g_edOldProc = (WNDPROC)SetWindowLongPtrW(g_edWL, GWLP_WNDPROC, (LONG_PTR)EditProc);
@@ -2504,12 +2598,7 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         GetClientRect(hwnd, &rc);
         BuildLayout((float)rc.right, (float)rc.bottom, dpi);
         CreateFonts();
-        if (g_edFont) DeleteObject(g_edFont);
-        g_edFont = CreateFontW(-MulDiv(10, (int)(96 * dpi), 72), 0, 0, 0, FW_NORMAL, 0, 0, 0,
-                               DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
-                               CLEARTYPE_QUALITY, DEFAULT_PITCH, FontFamily().c_str());
-        for (HWND e : { g_edWL })
-            if (e) SendMessageW(e, WM_SETFONT, (WPARAM)g_edFont, TRUE);
+        RebuildEditFont(dpi);
         PositionEdits();
         InvalidateRect(hwnd, nullptr, FALSE);
         return 0;
@@ -2616,6 +2705,18 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         InvalidateRect(hwnd, nullptr, FALSE);
         return 0;
     }
+    case WM_CAPTURECHANGED:
+        if ((HWND)lp != hwnd) {
+            if (g_draggingSlider) {
+                g_draggingSlider = false;
+                CommitSettings();
+            }
+            if (g_pressed) {
+                g_pressed = 0;
+                InvalidateRect(hwnd, nullptr, FALSE);
+            }
+        }
+        return 0;
     case WM_TIMER:
         if (wp == 1) {
             if (g_sheet == Sheet::System) QuerySysInfo(false);
@@ -2633,6 +2734,7 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             }
         }
         else if (wp == 2) {
+            if (!IsWindowVisible(hwnd)) { KillTimer(hwnd, 2); return 0; }
             if (StepAnimations()) InvalidateRect(hwnd, nullptr, FALSE);
             else KillTimer(hwnd, 2);
         }
@@ -2729,6 +2831,11 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         std::wstring* s = (std::wstring*)lp;
         // wp=1 表示自动清理：静音提示，内存清理不值得一声响
         if (s) { Balloon(*s, wp ? (NIIF_INFO | NIIF_NOSOUND) : NIIF_INFO); delete s; }
+        return 0;
+    }
+    case WM_APP_TOAST: {
+        std::wstring* s = (std::wstring*)lp;
+        if (s) { ShowToast(*s); delete s; }
         return 0;
     }
     case WM_APP_TRAY: {
@@ -2849,8 +2956,10 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         KillTimer(hwnd, 1);
         KillTimer(hwnd, 2);
         KillTimer(hwnd, 3);
+        KillTimer(hwnd, 4);
         TrayRemove();
         UnregisterHotKey(hwnd, HOTKEY_ID);
+        g_hwnd = nullptr;
         PostQuitMessage(0);
         return 0;
     default:
@@ -2869,14 +2978,15 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
 // ---------------------------------------------------------------------------
 
 static std::wstring ReadTextFileW(const std::wstring& path) {
-    HANDLE h = CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr,
-                           OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+    HANDLE h = CreateFileW(path.c_str(), GENERIC_READ,
+                           FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                           nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
     if (h == INVALID_HANDLE_VALUE) return L"";
     LARGE_INTEGER sz{};
-    GetFileSizeEx(h, &sz);
-    std::string raw((size_t)(sz.QuadPart > 0 ? sz.QuadPart : 0), 0);
+    if (!GetFileSizeEx(h, &sz) || sz.QuadPart <= 0) { CloseHandle(h); return L""; }
+    std::string raw((size_t)sz.QuadPart, 0);
     DWORD rd = 0;
-    if (!raw.empty()) ReadFile(h, raw.data(), (DWORD)raw.size(), &rd, nullptr);
+    if (!ReadFile(h, raw.data(), (DWORD)raw.size(), &rd, nullptr)) rd = 0;
     CloseHandle(h);
     raw.resize(rd);
     if (raw.size() >= 3 && (unsigned char)raw[0] == 0xEF) raw = raw.substr(3);
@@ -2984,7 +3094,9 @@ static void QuerySysInfo(bool deep) {
         std::wstring script =
             L"& { $m=Get-MMAgent; 'MC='+$m.MemoryCompression; 'PC='+$m.PageCombining; "
             L"'PL='+$m.ApplicationPreLaunch; $u=Get-CimInstance Win32_PageFileUsage; "
-            L"if($u){'PFALLOC='+$u.AllocatedBaseSize; 'PFUSE='+$u.CurrentUsage; 'PFPEAK='+$u.PeakUsage} "
+            L"if($u){'PFALLOC='+($u|Measure-Object AllocatedBaseSize -Sum).Sum; "
+            L"'PFUSE='+($u|Measure-Object CurrentUsage -Sum).Sum; "
+            L"'PFPEAK='+($u|Measure-Object PeakUsage -Sum).Sum} "
             L"} | Out-File -Encoding utf8 '" + outPs + L"'";
         RunPS(script);
         std::wstring txt = ReadTextFileW(outFile);
@@ -3011,7 +3123,6 @@ static void QuerySysInfo(bool deep) {
         if (!a.empty()) n.pfAllocMB = _wtoi64(a.c_str());
         if (!u.empty()) n.pfUseMB = _wtoi64(u.c_str());
         if (!pk.empty()) n.pfPeakMB = _wtoi64(pk.c_str());
-        n.loaded = true;
     }
 
     // 实时指标
@@ -3068,24 +3179,14 @@ static void DrawSysRow(Graphics& g, const RectF& r, bool ok, const std::wstring&
            warn ? T.warn : T.text, StringAlignmentFar);
 }
 
+__attribute__((noinline))
 static void DrawSystemSheet(Graphics& g) {
     DrawSheetFrame(g, L"系统状态", L"System status", false);
     AcquireSRWLockShared(&g_sysLock);
-    int warnings = 0;
-    bool know = g_sys.mmOk;
-    if (know && !g_sys.compression) warnings++;
-    if (know && !g_sys.pageCombining) warnings++;
-    if (!g_sys.sysmainRunning) warnings++;
-    // 页面文件告警与机器内存相关，不再硬编码作者机器的 24–64 GB：
-    // 只在“没有页面文件”或“提交压力大且自定义上限不足 8 GB”时提醒。
-    // “系统管理”（0 0 / ?:\pagefile.sys）是正常配置，不能报缺失。
-    const bool pfSystemManaged = !g_sys.pfPath.empty() && g_sys.pfInitMB <= 0 && g_sys.pfMaxMB <= 0;
-    const bool pfMissing = g_sys.pfPath.empty() && g_sys.pfAllocMB == 0;
-    const bool pfTooSmall = !pfSystemManaged && g_sys.pfMaxMB > 0 && g_sys.pfMaxMB < 8192 &&
-                            g_sys.commitPct > 90.0;
-    if (pfMissing || pfTooSmall) warnings++;
-    if (g_sys.commitPct > 90.0) warnings++;
-    if (g_sys.nonpaged > 1024ULL * MB) warnings++;
+    const bool know = g_sys.mmOk;
+    const int warnings = CountSysWarnings(g_sys);
+    bool pfSystemManaged = false, pfMissing = false, pfTooSmall = false;
+    SysPageFileFlags(g_sys, pfSystemManaged, pfMissing, pfTooSmall);
 
     std::wstring summary;
     Color sc = T.accent;
@@ -3182,15 +3283,15 @@ static void DrawSystemSheet(Graphics& g) {
 static bool WriteUtf8File(const std::wstring& path, const std::wstring& text) {
     int l = WideCharToMultiByte(CP_UTF8, 0, text.c_str(), (int)text.size(), nullptr, 0, nullptr, nullptr);
     std::string raw(l, 0);
-    WideCharToMultiByte(CP_UTF8, 0, text.c_str(), (int)text.size(), raw.data(), l, nullptr, nullptr);
+    if (l) WideCharToMultiByte(CP_UTF8, 0, text.c_str(), (int)text.size(), raw.data(), l, nullptr, nullptr);
     HANDLE h = CreateFileW(path.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
     if (h == INVALID_HANDLE_VALUE) return false;
-    DWORD wr = 0;
+    DWORD wr1 = 0, wr2 = 0;
     static const BYTE bom[3] = { 0xEF, 0xBB, 0xBF };
-    WriteFile(h, bom, 3, &wr, nullptr);
-    WriteFile(h, raw.data(), (DWORD)raw.size(), &wr, nullptr);
+    bool ok = WriteFile(h, bom, 3, &wr1, nullptr) && wr1 == 3 &&
+              (raw.empty() || (WriteFile(h, raw.data(), (DWORD)raw.size(), &wr2, nullptr) && wr2 == (DWORD)raw.size()));
     CloseHandle(h);
-    return true;
+    return ok;
 }
 static std::wstring DesktopDir() {
     wchar_t p[MAX_PATH] = {};
@@ -3254,135 +3355,102 @@ static void ExportDiagnostics() {
     }
     size_t startLine = lines.size() > 80 ? lines.size() - 80 : 0;
     for (size_t i = startLine; i < lines.size(); i++) { out += lines[i]; out += L"\r\n"; }
-    WriteUtf8File(path, out);
-    ShellExecuteW(nullptr, L"open", path.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
-    Log(L"诊断已导出：%s", path.c_str());
+    if (WriteUtf8File(path, out)) {
+        ShellExecuteW(nullptr, L"open", path.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+        Log(L"诊断已导出：%s", path.c_str());
+    } else {
+        PostToast(Tx(L"诊断文件导出失败，请检查桌面写入权限",
+                     L"Couldn't save diagnostics; check Desktop permissions"));
+        Log(L"诊断导出失败：%s", path.c_str());
+    }
 }
 
-static void SysActionWorker(int id) {
-    SysState st;
-    {
-        AcquireSRWLockShared(&g_sysLock);
-        st = g_sys;
-        ReleaseSRWLockShared(&g_sysLock);
-    }
-    auto confirm = [&](const wchar_t* zh, const wchar_t* en) {
-        return MessageBoxW(g_hwnd, Tx(zh, en), L"MemSweep",
-                           MB_YESNO | MB_ICONQUESTION) == IDYES;
-    };
-    if (id == 1 && st.mmOk && !st.compression) {
-        if (confirm(L"启用 Windows 内存压缩？\n\n会同时确保 SysMain 设为自动并启动。",
-                    L"Enable Windows memory compression?\n\nSysMain will be set to Automatic and started too.")) {
-            RunPS(L"Set-Service SysMain -StartupType Automatic; Start-Service SysMain; Enable-MMAgent -mc");
-            Log(L"系统检查：确保 SysMain 自动启动，并启用内存压缩");
-        }
-    } else if (id == 2 && st.mmOk && !st.pageCombining) {
-        if (confirm(L"启用页面合并？\n\n会同时确保 SysMain 设为自动并启动。",
-                    L"Enable page combining?\n\nSysMain will be set to Automatic and started too.")) {
-            RunPS(L"Set-Service SysMain -StartupType Automatic; Start-Service SysMain; Enable-MMAgent -pc");
-            Log(L"系统检查：确保 SysMain 自动启动，并启用页面合并");
-        }
-    } else if (id == 3 && (!st.pfPath.empty() || st.pfAllocMB > 0)) {
-        // 目标大小与这台机器的物理内存相关，不再硬编码 24–64 GB
-        MEMORYSTATUSEX ms{};
-        ms.dwLength = sizeof(ms);
-        GlobalMemoryStatusEx(&ms);
-        int initMB = (int)(ms.ullTotalPhys / MB);
-        int maxMB = initMB * 2;
-        if (initMB < 8192) initMB = 8192;
-        if (maxMB < 16384) maxMB = 16384;
-        wchar_t ask[256];
-        swprintf(ask, 256, Tx(L"把页面文件调整为 %d–%d MB？\n\n对每一个已配置的页面文件生效，需要重启。",
-                              L"Set page file to %d–%d MB?\n\nApplies to every configured page file; reboot required."),
-                 initMB, maxMB);
-        if (confirm(ask, ask)) {
-            std::wstring ps = L"Get-CimInstance Win32_PageFileSetting | ForEach-Object { "
-                              L"Set-CimInstance -InputObject $_ -Property @{InitialSize=" + std::to_wstring(initMB)
-                              + L";MaximumSize=" + std::to_wstring(maxMB) + L"} }";
-            RunPS(ps);
-            Log(L"系统检查：页面文件调整为 %d–%d MB（重启生效）", initMB, maxMB);
-        }
-    } else if (id == 4 && st.wslEnabled) {
-        if (confirm(L"让 WSL 把未使用的内存交还 Windows？\n\n会修改 %USERPROFILE%\\.wslconfig。",
-                    L"Let WSL return unused memory to Windows?\n\nThis edits %USERPROFILE%\\.wslconfig.")) {
-            wchar_t* up = _wgetenv(L"USERPROFILE");
-            std::wstring path = std::wstring(up && *up ? up : L"C:\\") + L"\\.wslconfig";
-            if (IsUtf16File(path)) {
-                g_toast = Tx(L".wslconfig 是 UTF-16 编码，请先另存为 UTF-8",
-                             L".wslconfig is UTF-16; save it as UTF-8 first");
-                g_lastToastMs = GetTickCount64();
-                Log(L"系统检查：.wslconfig 为 UTF-16，未改动");
+static void SysActionWorker(int id, int pfInitMB, int pfMaxMB) {
+    if (id == 1) {
+        RunPS(L"Set-Service SysMain -StartupType Automatic; Start-Service SysMain; Enable-MMAgent -mc");
+        Log(L"系统检查：确保 SysMain 自动启动，并启用内存压缩");
+    } else if (id == 2) {
+        RunPS(L"Set-Service SysMain -StartupType Automatic; Start-Service SysMain; Enable-MMAgent -pc");
+        Log(L"系统检查：确保 SysMain 自动启动，并启用页面合并");
+    } else if (id == 3 && pfInitMB > 0 && pfMaxMB > 0) {
+        std::wstring ps = L"Get-CimInstance Win32_PageFileSetting | ForEach-Object { "
+                          L"Set-CimInstance -InputObject $_ -Property @{InitialSize=" + std::to_wstring(pfInitMB)
+                          + L";MaximumSize=" + std::to_wstring(pfMaxMB) + L"} }";
+        RunPS(ps);
+        Log(L"系统检查：页面文件调整为 %d–%d MB（重启生效）", pfInitMB, pfMaxMB);
+    } else if (id == 4) {
+        wchar_t* up = _wgetenv(L"USERPROFILE");
+        std::wstring path = std::wstring(up && *up ? up : L"C:\\") + L"\\.wslconfig";
+        if (IsUtf16File(path)) {
+            PostToast(Tx(L".wslconfig 是 UTF-16 编码，请先另存为 UTF-8",
+                         L".wslconfig is UTF-16; save it as UTF-8 first"));
+            Log(L"系统检查：.wslconfig 为 UTF-16，未改动");
+        } else {
+            std::wstring txt = ReadTextFileW(path);
+            std::vector<std::wstring> lines;
+            size_t pos = 0;
+            while (pos <= txt.size()) {
+                size_t e = txt.find(L'\n', pos);
+                if (e == std::wstring::npos) e = txt.size();
+                std::wstring line = txt.substr(pos, e - pos);
+                if (!line.empty() && line.back() == L'\r') line.pop_back();   // 不让 CR 叠加
+                lines.push_back(std::move(line));
+                pos = e + 1;
+            }
+            if (!lines.empty() && lines.back().empty()) lines.pop_back();
+            bool inWsl2 = false, set = false, hasSection = false;
+            for (auto& line : lines) {
+                std::wstring t = TrimW(line);
+                if (t.size() > 2 && t[0] == L'[') {
+                    inWsl2 = (_wcsicmp(t.c_str(), L"[experimental]") == 0);
+                    if (inWsl2) hasSection = true;
+                } else if (inWsl2 && ToLower(t).rfind(L"automemoryreclaim", 0) == 0) {
+                    line = L"autoMemoryReclaim=gradual";
+                    set = true;
+                }
+            }
+            if (!hasSection) { lines.push_back(L"[experimental]"); lines.push_back(L"autoMemoryReclaim=gradual"); }
+            else if (!set) {
+                for (size_t i = 0; i < lines.size(); i++) {
+                    if (_wcsicmp(TrimW(lines[i]).c_str(), L"[experimental]") == 0) {
+                        lines.insert(lines.begin() + i + 1, L"autoMemoryReclaim=gradual");
+                        break;
+                    }
+                }
+            }
+            std::wstring out;
+            for (auto& line : lines) { out += line; out += L"\r\n"; }
+            // 先写临时文件再替换：写入失败时原 .wslconfig 保持原样
+            std::wstring tmp = path + L".memsweep.tmp";
+            bool wrote = false;
+            HANDLE h = CreateFileW(tmp.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS,
+                                   FILE_ATTRIBUTE_NORMAL, nullptr);
+            if (h != INVALID_HANDLE_VALUE) {
+                int l = WideCharToMultiByte(CP_UTF8, 0, out.c_str(), (int)out.size(), nullptr, 0, nullptr, nullptr);
+                std::string raw(l, 0);
+                if (l) WideCharToMultiByte(CP_UTF8, 0, out.c_str(), (int)out.size(), raw.data(), l, nullptr, nullptr);
+                DWORD wr = 0;
+                wrote = raw.empty() || (WriteFile(h, raw.data(), (DWORD)raw.size(), &wr, nullptr) && wr == (DWORD)raw.size());
+                CloseHandle(h);
+                if (wrote && !MoveFileExW(tmp.c_str(), path.c_str(), MOVEFILE_REPLACE_EXISTING))
+                    wrote = false;
+            }
+            if (wrote) {
+                PostToast(Tx(L"已更新 .wslconfig，重启 WSL 后生效",
+                             L"Updated .wslconfig; restart WSL to apply"));
+                Log(L"系统检查：写入 .wslconfig autoMemoryReclaim=gradual");
             } else {
-                std::wstring txt = ReadTextFileW(path);
-                std::vector<std::wstring> lines;
-                size_t pos = 0;
-                while (pos <= txt.size()) {
-                    size_t e = txt.find(L'\n', pos);
-                    if (e == std::wstring::npos) e = txt.size();
-                    std::wstring line = txt.substr(pos, e - pos);
-                    if (!line.empty() && line.back() == L'\r') line.pop_back();   // 不让 CR 叠加
-                    lines.push_back(std::move(line));
-                    pos = e + 1;
-                }
-                if (!lines.empty() && lines.back().empty()) lines.pop_back();
-                bool inWsl2 = false, set = false, hasSection = false;
-                for (auto& line : lines) {
-                    std::wstring t = TrimW(line);
-                    if (t.size() > 2 && t[0] == L'[') {
-                        inWsl2 = (_wcsicmp(t.c_str(), L"[experimental]") == 0);
-                        if (inWsl2) hasSection = true;
-                    } else if (inWsl2 && ToLower(t).rfind(L"automemoryreclaim", 0) == 0) {
-                        line = L"autoMemoryReclaim=gradual";
-                        set = true;
-                    }
-                }
-                if (!hasSection) { lines.push_back(L"[experimental]"); lines.push_back(L"autoMemoryReclaim=gradual"); }
-                else if (!set) {
-                    for (size_t i = 0; i < lines.size(); i++) {
-                        if (_wcsicmp(TrimW(lines[i]).c_str(), L"[experimental]") == 0) {
-                            lines.insert(lines.begin() + i + 1, L"autoMemoryReclaim=gradual");
-                            break;
-                        }
-                    }
-                }
-                std::wstring out;
-                for (auto& line : lines) { out += line; out += L"\r\n"; }
-                // 先写临时文件再替换：写入失败时原 .wslconfig 保持原样
-                std::wstring tmp = path + L".memsweep.tmp";
-                bool wrote = false;
-                HANDLE h = CreateFileW(tmp.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS,
-                                       FILE_ATTRIBUTE_NORMAL, nullptr);
-                if (h != INVALID_HANDLE_VALUE) {
-                    int l = WideCharToMultiByte(CP_UTF8, 0, out.c_str(), (int)out.size(), nullptr, 0, nullptr, nullptr);
-                    std::string raw(l, 0);
-                    WideCharToMultiByte(CP_UTF8, 0, out.c_str(), (int)out.size(), raw.data(), l, nullptr, nullptr);
-                    DWORD wr = 0;
-                    wrote = WriteFile(h, raw.data(), (DWORD)raw.size(), &wr, nullptr) && wr == (DWORD)raw.size();
-                    CloseHandle(h);
-                    if (wrote && !MoveFileExW(tmp.c_str(), path.c_str(), MOVEFILE_REPLACE_EXISTING))
-                        wrote = false;
-                }
-                if (wrote) {
-                    Log(L"系统检查：写入 .wslconfig autoMemoryReclaim=gradual");
-                } else {
-                    DeleteFileW(tmp.c_str());
-                    g_toast = Tx(L".wslconfig 写入失败，原文件未改动",
-                                 L"Couldn't write .wslconfig; the original file is unchanged");
-                    g_lastToastMs = GetTickCount64();
-                    Log(L"系统检查：.wslconfig 写入失败");
-                }
+                DeleteFileW(tmp.c_str());
+                PostToast(Tx(L".wslconfig 写入失败，原文件未改动",
+                             L"Couldn't write .wslconfig; the original file is unchanged"));
+                Log(L"系统检查：.wslconfig 写入失败");
             }
         }
     } else if (id == 5) {
         ExportDiagnostics();
-        if (g_hwnd) InvalidateRect(g_hwnd, nullptr, FALSE);
-        return;
-    } else if (id == 6) {
-        CloseSheet();
         return;
     }
     QuerySysInfo(true);
-    if (g_hwnd) InvalidateRect(g_hwnd, nullptr, FALSE);
 }
 
 static DWORD WINAPI SysInfoThread(LPVOID) {
@@ -3399,26 +3467,74 @@ static void QuerySysInfoAsync() {
     else InterlockedExchange(&g_sysLoading, 0);
 }
 
+struct SysActParam { int id; int pfInitMB; int pfMaxMB; };
 static DWORD WINAPI SysActionThread(LPVOID p) {
-    SysActionWorker((int)(intptr_t)p);
+    auto* ap = (SysActParam*)p;
+    if (ap) {
+        SysActionWorker(ap->id, ap->pfInitMB, ap->pfMaxMB);
+        delete ap;
+    }
     InterlockedExchange(&g_sysLoading, 0);
     if (g_hwnd) PostMessageW(g_hwnd, WM_APP_SYSINFO, 0, 0);
     return 0;
 }
 static void SysAction(int id) {
-    if (id == 6) {
-        CloseSheet();
+    if (g_sysLoading != 0) {
+        ShowToast(Tx(L"正在读取系统状态…", L"Reading system state…"));
         return;
     }
+    SysState st;
+    {
+        AcquireSRWLockShared(&g_sysLock);
+        st = g_sys;
+        ReleaseSRWLockShared(&g_sysLock);
+    }
+    // 确认对话框必须在 UI 线程弹出，避免跨线程 MessageBoxW 阻塞窗口消息队列。
+    auto confirm = [&](const wchar_t* zh, const wchar_t* en) {
+        return MessageBoxW(g_hwnd, Tx(zh, en), L"MemSweep", MB_YESNO | MB_ICONQUESTION) == IDYES;
+    };
+    int pfInitMB = 0, pfMaxMB = 0;
+    if (id == 1) {
+        if (!st.mmOk || st.compression) return;
+        if (!confirm(L"启用 Windows 内存压缩？\n\n同时会把 SysMain 设为自动启动并开启它。",
+                     L"Enable Windows memory compression?\n\nThis also sets SysMain to Automatic and starts it."))
+            return;
+    } else if (id == 2) {
+        if (!st.mmOk || st.pageCombining) return;
+        if (!confirm(L"启用页面合并？\n\n同时会把 SysMain 设为自动启动并开启它。",
+                     L"Enable page combining?\n\nThis also sets SysMain to Automatic and starts it."))
+            return;
+    } else if (id == 3) {
+        if (st.pfPath.empty() && st.pfAllocMB == 0) return;
+        MEMORYSTATUSEX ms{};
+        ms.dwLength = sizeof(ms);
+        GlobalMemoryStatusEx(&ms);
+        pfInitMB = (int)(ms.ullTotalPhys / MB);
+        pfMaxMB = pfInitMB * 2;
+        if (pfInitMB < 8192) pfInitMB = 8192;
+        if (pfMaxMB < 16384) pfMaxMB = 16384;
+        wchar_t ask[256];
+        swprintf(ask, 256, Tx(L"把页面文件调整为 %d–%d MB？\n\n将应用到所有已配置的页面文件，重启后生效。",
+                              L"Set page file to %d–%d MB?\n\nApplies to every configured page file after a reboot."),
+                 pfInitMB, pfMaxMB);
+        if (!confirm(ask, ask)) return;
+    } else if (id == 4) {
+        if (!st.wslEnabled) return;
+        if (!confirm(L"让 WSL 把未使用的内存交还 Windows？\n\n会修改 %USERPROFILE%\\.wslconfig。",
+                     L"Let WSL return unused memory to Windows?\n\nThis edits %USERPROFILE%\\.wslconfig."))
+            return;
+    } else if (id != 5) {
+        return;
+    }
+
     if (InterlockedCompareExchange(&g_sysLoading, 1, 0) != 0) {
-        g_toast = Tx(L"正在读取系统状态…", L"Reading system state…");
-        g_lastToastMs = GetTickCount64();
-        KickAnim();
+        ShowToast(Tx(L"正在读取系统状态…", L"Reading system state…"));
         return;
     }
-    HANDLE h = CreateThread(nullptr, 0, SysActionThread, (LPVOID)(intptr_t)id, 0, nullptr);
+    auto* ap = new SysActParam{ id, pfInitMB, pfMaxMB };
+    HANDLE h = CreateThread(nullptr, 0, SysActionThread, ap, 0, nullptr);
     if (h) CloseHandle(h);
-    else InterlockedExchange(&g_sysLoading, 0);
+    else { delete ap; InterlockedExchange(&g_sysLoading, 0); }
 }
 
 static void ShowSystemCheck() {
@@ -3446,7 +3562,7 @@ int RenderSysCheckSnapshot(const std::wstring& path) {
         LeaveCriticalSection(&g_lock);
     }
     QuerySysInfo(true);
-    Log(L"[checkpng] status loaded=%d mmOk=%d", (int)g_sys.loaded, (int)g_sys.mmOk);
+    Log(L"[checkpng] status mmOk=%d", (int)g_sys.mmOk);
     HeapCompact(GetProcessHeap(), 0);
     float scale = 1.0f;
     {
@@ -3499,35 +3615,34 @@ static HWND FindMainWindow() {
     EnumWindows(FindMainProc, (LPARAM)&c);
     return c.out;
 }
-void UI_ForwardShow() {
+static HWND WaitMainWindow() {
     for (int i = 0; i < 4; i++) {
         HWND h = FindMainWindow();
-        if (h) {
-            DWORD pid = 0;
-            GetWindowThreadProcessId(h, &pid);
-            if (pid) AllowSetForegroundWindow(pid);
-            DWORD_PTR res = 0;
-            SendMessageTimeoutW(h, WM_APP_SHOW, 0, 0, SMTO_ABORTIFHUNG | SMTO_BLOCK, 1500, &res);
-            return;
-        }
-        Sleep(200);
+        if (h) return h;
+        Sleep(150);
     }
+    return nullptr;
+}
+void UI_ForwardShow() {
+    HWND h = WaitMainWindow();
+    if (!h) return;
+    DWORD pid = 0;
+    GetWindowThreadProcessId(h, &pid);
+    if (pid) AllowSetForegroundWindow(pid);
+    DWORD_PTR res = 0;
+    SendMessageTimeoutW(h, WM_APP_SHOW, 0, 0, SMTO_ABORTIFHUNG | SMTO_BLOCK, 1500, &res);
 }
 void UI_ForwardClean() {
-    HWND h = FindMainWindow();
-    if (h) PostMessageW(h, WM_APP_CLEAN, 0, 0);
+    if (HWND h = WaitMainWindow()) PostMessageW(h, WM_APP_CLEAN, 0, 0);
 }
 void UI_ForwardExit() {
-    HWND h = FindMainWindow();
-    if (h) PostMessageW(h, WM_APP_EXIT, 0, 0);
+    if (HWND h = WaitMainWindow()) PostMessageW(h, WM_APP_EXIT, 0, 0);
 }
 void UI_ForwardPause(int minutes) {
-    HWND h = FindMainWindow();
-    if (h) PostMessageW(h, WM_APP_PAUSE, (WPARAM)minutes, 0);
+    if (HWND h = WaitMainWindow()) PostMessageW(h, WM_APP_PAUSE, (WPARAM)minutes, 0);
 }
 void UI_ForwardCombine() {
-    HWND h = FindMainWindow();
-    if (h) PostMessageW(h, WM_APP_COMBINE, 0, 0);
+    if (HWND h = WaitMainWindow()) PostMessageW(h, WM_APP_COMBINE, 0, 0);
 }
 
 // ---------------------------------------------------------------------------
@@ -3657,28 +3772,17 @@ int RunUI(HINSTANCE hInst, bool showOnStart) {
     InitThemeFromConfig();
     CreateFonts();
 
-    // 深色菜单
-    HMODULE ux = LoadLibraryW(L"uxtheme.dll");
-    if (ux) {
-        typedef void (WINAPI* FnMode)(int);
-        typedef void (WINAPI* FnFlush)();
-        auto fn = (FnMode)GetProcAddress(ux, MAKEINTRESOURCEA(135));
-        auto fl = (FnFlush)GetProcAddress(ux, MAKEINTRESOURCEA(136));
-        if (fn) fn(g_dark ? 1 : 3);   // AllowDark / ForceLight
-        if (fl) fl();
-    }
-
     g_msgTaskbarCreated = RegisterWindowMessageW(L"TaskbarCreated");
 
     // 前台焦点历史改为事件驱动：窗口切到前台时立刻记录，
     // 只靠 5 秒轮询时，一闪而过的前台应用会漏掉 120 秒保护窗口。
-    SetWinEventHook(EVENT_SYSTEM_FOREGROUND, EVENT_SYSTEM_FOREGROUND, nullptr,
-                    [](HWINEVENTHOOK, DWORD, HWND hwnd, LONG idObject, LONG, DWORD, DWORD) {
-                        if (idObject != OBJID_WINDOW || !hwnd) return;
-                        DWORD pid = 0;
-                        GetWindowThreadProcessId(hwnd, &pid);
-                        if (pid) NoteFocus(pid);
-                    }, 0, 0, WINEVENT_OUTOFCONTEXT);
+    g_fgHook = SetWinEventHook(EVENT_SYSTEM_FOREGROUND, EVENT_SYSTEM_FOREGROUND, nullptr,
+                               [](HWINEVENTHOOK, DWORD, HWND hwnd, LONG idObject, LONG, DWORD, DWORD) {
+                                   if (idObject != OBJID_WINDOW || !hwnd) return;
+                                   DWORD pid = 0;
+                                   GetWindowThreadProcessId(hwnd, &pid);
+                                   if (pid) NoteFocus(pid);
+                               }, 0, 0, WINEVENT_OUTOFCONTEXT);
 
     WNDCLASSEXW wc{};
     wc.cbSize = sizeof(wc);
@@ -3752,17 +3856,16 @@ int RunUI(HINSTANCE hInst, bool showOnStart) {
     if (firstRun || showOnStart) {
         BringMainToFront();
         std::wstring welcome = Tx(L"欢迎使用 MemSweep · ", L"Welcome to MemSweep · ");
-        if (s_hotkey) welcome += g_hkSpec.ToString() + Tx(L" 随时清理", L" cleans anytime");
-        else welcome += Tx(L"热键已关闭，可在 设置 › 高级设置 中开启",
+        if (s_hotkey) welcome += g_hkSpec.ToString() + Tx(L" 可随时清理", L" cleans anytime");
+        else welcome += Tx(L"热键已关闭，可在「设置 › 高级设置」中开启",
                            L"hotkey is off; enable it in Settings › Advanced");
         g_toast = welcome;
         g_lastToastMs = GetTickCount64();
         if (firstRun) SaveConfig();
     }
 
-    // 监控线程
+    // 监控线程（由线程内发起首次 MonitorTick，避免 UI 启动与线程竞态）
     g_monThread = CreateThread(nullptr, 0, MonitorThreadProc, nullptr, 0, nullptr);
-    MonitorTick();
     QueryAutostartAsync();
 
     MSG msg;
@@ -3772,6 +3875,7 @@ int RunUI(HINSTANCE hInst, bool showOnStart) {
     }
 
     g_quit = 1;
+    if (g_fgHook) { UnhookWinEvent(g_fgHook); g_fgHook = nullptr; }
     if (g_monThread) {
         WaitForSingleObject(g_monThread, 2000);
         CloseHandle(g_monThread);

@@ -109,7 +109,8 @@ build.cmd test     :: dev + /selftest + /idlecheck + /uipng + /checkpng
 
 ## 5.0 Sheet 模型
 
-- `Sheet::None / Settings / Advanced / Processes / System`；没有顶层 Page 枚举、没有顶部导航。
+- `Sheet::None / Settings / Advanced / Processes / System / About`；没有顶层 Page 枚举、没有顶部导航。
+- 首页「系统状态」卡片与 System Sheet 共用 `CountSysWarnings()` 同一套告警口径；进程表通过 `g_procListDirty` 缓存，悬停重绘不重新排序。
 - 主屏 4 组：状态句 + 细环 + 主按钮 + 两个文字入口；进程/系统按需打开。
 - Sheet 是主屏上的一层覆盖：scrim + 200ms ease-out 位移；没有页面交叉淡入、没有页面位图。
 - 设置 Sheet 单列、无 tabs、无保存按钮；修改即时 `CommitSettings()`（debounce/失焦/关闭时）。
@@ -124,8 +125,10 @@ build.cmd test     :: dev + /selftest + /idlecheck + /uipng + /checkpng
   `DrawAll(clip)` 仅栅格化失效区）；环境动效只失效仪表矩形；禁止全屏 Invalidate 的高频路径。
 - **托盘纪律**：图标只在整数百分比变化时重建（DIB+GDI+ 绘制开销大）；
   tooltip 变化走 `NIF_TIP` 轻量更新；`Shell_NotifyIcon` IPC 不进入每秒路径。
-- **体积纪律**：`-Oz + gc-sections + strip` 为该工具链实测最优；已否决
-  `-falign-*`/`-fmerge-all-constants`（零收益）、unwind 表移除（CRT `.seh_` 编译失败）、
+- **体积纪律**：`-Oz + -fvisibility=hidden + -fvisibility-inlines-hidden + gc-sections + strip` 为该工具链实测最优，
+  `build.cmd` 分离 `obj/app.res` / `obj/app_dev.res` / `obj/app_arm64.res` 避免目标互踩；`SaveConfig()` 用单块
+  `swprintf` 缓冲替代 25 次 `std::to_wstring` 拼接；Sheet 绘制函数加 `noinline` 控制 `DrawAll` 帧膨胀。
+  已否决 `-falign-*`/`-fmerge-all-constants`（零收益）、unwind 表移除（CRT `.seh_` 编译失败）、
   `--icf`/`--build-id=none`/`--no-insert-timestamp`/`-stdlib=libc++`（不支持或无收益）、
   `-fno-threadsafe-statics`（省 512B，但静态初始化有并发风险）。ico 只保留
   16/20/24/32/48/256 六个关键尺寸；进程名统一走 `NormalizeProcName`。
@@ -146,16 +149,16 @@ build.cmd test     :: dev + /selftest + /idlecheck + /uipng + /checkpng
 ## 5.1 线程模型
 
 - UI 线程：窗口消息、GDI+ 绘制、配置编辑；只做轻量读取。
-- `MonitorThread`：等待 `monEvent + LowMemoryResourceNotification`（5s 超时，低内存事件 2s 节流）+ 采样与策略；
+- `MonitorThread`：首次采样也由线程内完成（`RunUI` 不再并发调用），等待 `monEvent + LowMemoryResourceNotification`（5s 超时，低内存事件 2s 节流）+ 采样与策略；
   每 tick 计算 `ComputeReclaimable`（估算主屏“可释放约 X”）；配置一律取 `GetConfigSnapshot()` 不可变副本；
   通过临界区发布 `Metrics`，UI 只做取整比较。
-- `SysInfoThread`：`Get-MMAgent` / `Win32_PageFileUsage`，WSL 用 `LxssManager` 注册表键快速探测；
+- `SysInfoThread`：`Get-MMAgent` / `Win32_PageFileUsage`（多盘页面文件用 `Measure-Object -Sum` 汇总），WSL 用 `LxssManager` 注册表键快速探测；
   在本地 `SysState` 上完成查询，`SRWLOCK` 一次性换入；完成后 `WM_APP_SYSINFO`（仅系统 Sheet 可见时刷新）。
-- `SysActionThread`：系统修改 + 确认框 + 刷新；启动时复制 `SysState` 快照，`WM_APP_SYSINFO`。
+- `SysActionThread`：确认 `MessageBoxW` 先在 UI 线程完成，`SysActionThread` 只做后台 PowerShell / `.wslconfig` 原子写与状态刷新，需要提示时走 `WM_APP_TOAST`；`WM_APP_SYSINFO`。
 - `AutostartThread`：`schtasks` 创建/删除；`WM_APP_AUTOSTART`。
 - `IdleDeepThread`（离开时维护）：空闲判定通过后取 `PlanIdle` 快照执行；
   独立 watcher 线程监视用户输入，`SetEvent(cancel)` → RunClean 修剪循环与页面合并同步中止。
-- 任何后台线程不得直接触碰窗口句柄之外的 UI 状态；`HWND` 仅用于 `PostMessage`。
+- 任何后台线程不得直接触碰窗口句柄之外的 UI 状态；`HWND` 仅用于 `PostMessage`（`WM_APP_TOAST` / `WM_APP_BALLOON` 等）。
 
 ## 6. 代码风格
 
@@ -189,4 +192,5 @@ build.cmd test     :: dev + /selftest + /idlecheck + /uipng + /checkpng
   `winget validate --manifest <目录>` 通过；schema 1.28.0，文件名必须是 `<id>.locale.en-US.yaml`
 - [ ] `docs/release-notes/<tag>.md` 已写：按 `_TEMPLATE.md` 的三条规矩——一句话概述 + 3–5 条用户可见变化、
   不写实现细节/包体/测试结果、英文在前中文在后；`release.yml` 优先用它，缺失才退回自动生成
+- [ ] `src/common.h`、`res/app.rc`、`res/app.manifest`、`res/app_dev.manifest` 版本号一致
 - [ ] README/CHANGELOG/RESEARCH/ENGINEERING 更新

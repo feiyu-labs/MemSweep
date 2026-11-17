@@ -70,7 +70,6 @@ int APIENTRY wWinMain(HINSTANCE hInst, HINSTANCE, PWSTR, int) {
     const bool dryrun   = HasArg(L"/dryrun");
     const bool oneShot  = HasArg(L"/clean");
     const bool wantExit = HasArg(L"/exit");
-    const bool wantShow = HasArg(L"/show");
 
     if (selftest) {
         EnsureConsole();
@@ -145,16 +144,13 @@ int APIENTRY wWinMain(HINSTANCE hInst, HINSTANCE, PWSTR, int) {
         return 0;
     }
     if (oneShot) {
-        bool already = AlreadyRunning();
-        Log(L"/clean: alreadyRunning=%d", (int)already);
-        if (already) {
-            UI_ForwardClean();
-            return 0;
-        }
+        // 先抢占实例互斥量；若已存在则转发给运行中 UI，否则一直持有到清理完成，
+        // 避免并发 /clean 或启动过程中发生清理重入。
         HANDLE mtx = CreateMutexW(nullptr, TRUE, L"Local\\MemSweep.Instance");
         bool heldByOther = (!mtx || GetLastError() == ERROR_ALREADY_EXISTS);
-        if (mtx) CloseHandle(mtx);
+        Log(L"/clean: heldByOther=%d", (int)heldByOther);
         if (heldByOther) {
+            if (mtx) CloseHandle(mtx);
             UI_ForwardClean();
             return 0;
         }
@@ -164,6 +160,8 @@ int APIENTRY wWinMain(HINSTANCE hInst, HINSTANCE, PWSTR, int) {
             Log(L"[dev] /clean unelevated (purge will fail, trim works)");
 #else
             ConPrint(L"MemSweep needs administrator privileges.\n");
+            ReleaseMutex(mtx);
+            CloseHandle(mtx);
             return 2;
 #endif
         }
@@ -179,27 +177,23 @@ int APIENTRY wWinMain(HINSTANCE hInst, HINSTANCE, PWSTR, int) {
                  r.trimmed, r.attempted,
                  (int)r.standbyLow, (int)r.standbyFull, (int)r.cache,
                  (int)r.combined, r.pagesCombined);
+        ReleaseMutex(mtx);
+        CloseHandle(mtx);
         return 0;
     }
 
     // UI mode (single instance)
     bool showOnStart = !HasArg(L"/tray");
-    Log(L"UI launch: cmdline=%s alreadyRunning=%d", GetCommandLineW(), (int)AlreadyRunning());
-    bool already = AlreadyRunning();
-    if (already) {
-        if (wantExit) UI_ForwardExit();
-        else UI_ForwardShow();
-        return 0;
-    }
     HANDLE mtx = CreateMutexW(nullptr, TRUE, L"Local\\MemSweep.Instance");
     if (!mtx || GetLastError() == ERROR_ALREADY_EXISTS) {
         // 以创建结果为准，消除“先查后建”的窗口：两个实例同时启动只有一个能进来
         if (mtx) CloseHandle(mtx);
+        Log(L"UI launch forwarded to running instance: cmdline=%s", GetCommandLineW());
         if (wantExit) UI_ForwardExit();
         else UI_ForwardShow();
         return 0;
     }
-    (void)wantShow;
+    Log(L"UI launch: cmdline=%s", GetCommandLineW());
 
     if (wantExit) {
         // 没有正在运行的实例时 /exit 只表示“确保已退出”，不能顺手把窗口开起来
@@ -213,11 +207,16 @@ int APIENTRY wWinMain(HINSTANCE hInst, HINSTANCE, PWSTR, int) {
         Log(L"[dev] running unelevated (UI only, clean actions will fail)");
 #else
         MessageBoxW(nullptr,
-                    Tx(L"MemSweep 需要管理员权限才能清理内核内存。\n请右键「以管理员身份运行」。",
-                       L"MemSweep requires administrator privileges.\nPlease run as administrator."),
+                    Tx(L"MemSweep 需要管理员权限才能清理内存。\n请右键选择「以管理员身份运行」。",
+                       L"MemSweep requires administrator privileges.\nPlease run it as administrator."),
                     L"MemSweep", MB_ICONWARNING);
+        ReleaseMutex(mtx);
+        CloseHandle(mtx);
         return 1;
 #endif
     }
-    return RunUI(hInst, showOnStart);
+    int uiRc = RunUI(hInst, showOnStart);
+    ReleaseMutex(mtx);
+    CloseHandle(mtx);
+    return uiRc;
 }

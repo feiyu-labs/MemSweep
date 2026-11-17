@@ -2,8 +2,8 @@
 #pragma once
 
 // 单一版本源：UI 关于页、诊断导出、日志共用；资源文件 res/app.rc 仍需手动同步。
-#define MEMSWEEP_VERSION      L"1.9.19"
-#define MEMSWEEP_VERSION_FULL L"1.9.19.0"
+#define MEMSWEEP_VERSION      L"1.9.20"
+#define MEMSWEEP_VERSION_FULL L"1.9.20.0"
 
 
 #define WIN32_LEAN_AND_MEAN
@@ -36,13 +36,13 @@ constexpr UINT WM_APP_CLEAN     = WM_APP + 0x12;
 constexpr UINT WM_APP_EXIT      = WM_APP + 0x13;
 constexpr UINT WM_APP_CLEANING  = WM_APP + 0x14;
 constexpr UINT WM_APP_SHOW      = WM_APP + 0x15;
-constexpr UINT WM_APP_SAVED     = WM_APP + 0x16;
 constexpr UINT WM_APP_BALLOON   = WM_APP + 0x17;
 constexpr UINT WM_APP_PAUSE     = WM_APP + 0x18;
 constexpr UINT WM_APP_COMBINE   = WM_APP + 0x19;
 constexpr UINT WM_APP_SYSINFO   = WM_APP + 0x1A;
 constexpr UINT WM_APP_AUTOSTART = WM_APP + 0x1B;
-constexpr UINT WM_APP_AUTOSTATE  = WM_APP + 0x1C;
+constexpr UINT WM_APP_AUTOSTATE = WM_APP + 0x1C;
+constexpr UINT WM_APP_TOAST     = WM_APP + 0x1D;
 
 constexpr int  HOTKEY_ID        = 1;
 constexpr wchar_t kClassName[]  = L"MemSweepMainWindow";
@@ -74,7 +74,7 @@ inline std::vector<std::wstring> SplitCSV(const std::wstring& s) {
     std::vector<std::wstring> out;
     std::wstring cur;
     for (wchar_t c : s) {
-        if (c == L',' || c == L';' || c == L'，') {
+        if (c == L',' || c == L';' || c == L'，' || c == L'；') {
             std::wstring t = ToLower(TrimW(cur));
             if (!t.empty()) out.push_back(t);
             cur.clear();
@@ -99,26 +99,12 @@ inline std::wstring FormatBytes(unsigned long long b) {
     else swprintf(buf, 64, L"%.0f KB", (double)b / KB);
     return buf;
 }
-inline std::wstring FormatInt(unsigned long long v) {
-    wchar_t buf[32];
-    swprintf(buf, 32, L"%llu", v);
-    int len = (int)wcslen(buf), pos = 0, trip = 0;
-    wchar_t out[48];
-    for (int i = len - 1; i >= 0; i--) {
-        out[pos++] = buf[i];
-        if (++trip == 3 && i > 0) { out[pos++] = L','; trip = 0; }
-    }
-    out[pos] = 0;
-    for (int i = 0; i < pos / 2; i++) std::swap(out[i], out[pos - 1 - i]);
-    return out;
-}
 inline int ClampInt(int v, int lo, int hi) { return v < lo ? lo : (v > hi ? hi : v); }
 inline float ClampF(float v, float lo, float hi) { return v < lo ? lo : (v > hi ? hi : v); }
 // 清理结果只看“净增量”，避免 after < before 时出现回绕或负数
 inline unsigned long long Grow(unsigned long long after, unsigned long long before) {
     return after > before ? after - before : 0;
 }
-inline float Lerp(float a, float b, float t) { return a + (b - a) * t; }
 inline float EaseOutCubic(float t) { float u = 1.0f - t; return 1.0f - u * u * u; }
 
 // ---- 全局热键 ----
@@ -129,8 +115,6 @@ inline float EaseOutCubic(float t) { float u = 1.0f - t; return 1.0f - u * u * u
 struct HotkeySpec {
     UINT mods = MOD_CONTROL | MOD_SHIFT;
     UINT vk   = 'M';
-
-    bool IsDefault() const { return mods == (MOD_CONTROL | MOD_SHIFT) && vk == 'M'; }
 
     static std::wstring KeyLabel(UINT vk) {
         if (vk >= 'A' && vk <= 'Z') return std::wstring(1, (wchar_t)vk);

@@ -159,21 +159,26 @@ struct SI_FILECACHE {
 // 配置 / 日志路径
 // ---------------------------------------------------------------------------
 std::wstring ConfigDir() {
-    wchar_t path[MAX_PATH] = {};
-    GetModuleFileNameW(nullptr, path, MAX_PATH);
-    std::wstring exe(path);
-    size_t p = exe.find_last_of(L'\\');
-    std::wstring exeDir = (p == std::wstring::npos) ? exe : exe.substr(0, p);
-    if (GetFileAttributesW((exeDir + L"\\MemSweep.ini").c_str()) != INVALID_FILE_ATTRIBUTES)
-        return exeDir;   // 便携模式
-    wchar_t* ad = _wgetenv(L"APPDATA");
-    return std::wstring((ad && *ad) ? ad : exeDir.c_str()) + L"\\MemSweep";
+    // 进程运行期间路径不会变化：首次解析后缓存，省去每次 Log() 的 GetModuleFileNameW / GetFileAttributesW 系统调用。
+    static const std::wstring dir = []() -> std::wstring {
+        wchar_t path[MAX_PATH] = {};
+        GetModuleFileNameW(nullptr, path, MAX_PATH);
+        std::wstring exe(path);
+        size_t p = exe.find_last_of(L'\\');
+        std::wstring exeDir = (p == std::wstring::npos) ? exe : exe.substr(0, p);
+        if (GetFileAttributesW((exeDir + L"\\MemSweep.ini").c_str()) != INVALID_FILE_ATTRIBUTES)
+            return exeDir;   // 便携模式
+        wchar_t* ad = _wgetenv(L"APPDATA");
+        return std::wstring((ad && *ad) ? ad : exeDir.c_str()) + L"\\MemSweep";
+    }();
+    return dir;
 }
 std::wstring ConfigPath() { return ConfigDir() + L"\\config.ini"; }
 std::wstring LogPath() { return ConfigDir() + L"\\log.txt"; }
 
 static std::wstring ReadTextUtf8(const std::wstring& path) {
-    HANDLE h = CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr,
+    HANDLE h = CreateFileW(path.c_str(), GENERIC_READ,
+                           FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr,
                            OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
     if (h == INVALID_HANDLE_VALUE) return L"";
     LARGE_INTEGER sz{};
@@ -199,16 +204,32 @@ static bool WriteTextUtf8(const std::wstring& path, const std::wstring& data) {
     std::wstring tmp = path + L".tmp";
     HANDLE h = CreateFileW(tmp.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
     if (h == INVALID_HANDLE_VALUE) return false;
-    DWORD wr = 0;
-    BOOL w1 = WriteFile(h, "\xEF\xBB\xBF", 3, &wr, nullptr);
-    BOOL w2 = WriteFile(h, raw.data(), (DWORD)raw.size(), &wr, nullptr);
+    DWORD wr1 = 0, wr2 = 0;
+    BOOL w1 = WriteFile(h, "\xEF\xBB\xBF", 3, &wr1, nullptr);
+    BOOL w2 = WriteFile(h, raw.data(), (DWORD)raw.size(), &wr2, nullptr);
     CloseHandle(h);
-    if (!w1 || !w2 || wr != (DWORD)raw.size()) {
+    if (!w1 || wr1 != 3 || !w2 || wr2 != (DWORD)raw.size()) {
         // 写入失败（磁盘满/杀软锁定）时保留旧配置，绝不拿半截文件替换
         DeleteFileW(tmp.c_str());
         return false;
     }
     return MoveFileExW(tmp.c_str(), path.c_str(), MOVEFILE_REPLACE_EXISTING) != 0;
+}
+
+static int ParseConfigInt(const std::wstring& raw, int d) {
+    std::wstring v = TrimW(raw);
+    if (v.empty()) return d;
+    wchar_t* end = nullptr;
+    long n = wcstol(v.c_str(), &end, 10);
+    if (!end || *end != 0 || n < -1000000 || n > 1000000) return d;
+    return (int)n;
+}
+static bool ParseConfigBool(const std::wstring& raw, bool d) {
+    std::wstring v = ToLower(TrimW(raw));
+    if (v.empty()) return d;
+    if (v == L"1" || v == L"true" || v == L"yes" || v == L"on") return true;
+    if (v == L"0" || v == L"false" || v == L"no" || v == L"off") return false;
+    return d;
 }
 
 void LoadConfig() {
@@ -227,25 +248,13 @@ void LoadConfig() {
     }
     auto get  = [&](const wchar_t* k) { auto it = kv.find(k); return it == kv.end() ? std::wstring() : it->second; };
     auto has  = [&](const wchar_t* k) { return kv.find(k) != kv.end(); };
-    // 严格解析：坏值回落到默认值，不走 _wtoi 的“读不懂就 0，再被 ClampInt 推到最激进下限”。
-    auto parseInt = [&](const wchar_t* k, int d) {
-        std::wstring v = TrimW(get(k));
-        if (v.empty()) return d;
-        wchar_t* end = nullptr;
-        long n = wcstol(v.c_str(), &end, 10);
-        if (!end || *end != 0 || n < -1000000 || n > 1000000) return d;
-        return (int)n;
-    };
-    auto getB = [&](const wchar_t* k, bool d) {
-        std::wstring v = ToLower(TrimW(get(k)));
-        if (v.empty()) return d;
-        if (v == L"1" || v == L"true" || v == L"yes" || v == L"on") return true;
-        if (v == L"0" || v == L"false" || v == L"no" || v == L"off") return false;
-        return d;
-    };
+    auto parseInt = [&](const wchar_t* k, int d) { return ParseConfigInt(get(k), d); };
+    auto getB = [&](const wchar_t* k, bool d) { return ParseConfigBool(get(k), d); };
 
-    g_cfg.lang            = get(L"lang").empty() ? L"zh" : get(L"lang");
-    g_cfg.theme           = get(L"theme").empty() ? L"auto" : get(L"theme");
+    std::wstring lang = ToLower(get(L"lang"));
+    g_cfg.lang = (lang == L"en") ? L"en" : L"zh";
+    std::wstring theme = ToLower(get(L"theme"));
+    g_cfg.theme = (theme == L"light" || theme == L"dark") ? theme : L"auto";
     g_cfg.autoGuard       = getB(L"autoguard", true);
     g_cfg.threshold       = ClampInt(parseInt(L"threshold", 85), 60, 95);
     g_cfg.cooldownSec     = ClampInt(parseInt(L"cooldownsec", 180), 30, 3600);
@@ -290,36 +299,28 @@ void LoadConfig() {
 bool SaveConfig() {
     Config c = g_cfg;
     PublishConfig(c);
-    std::wstring s;
-    s += L"# MemSweep config (UTF-8)\n[general]\n";
-    s += L"lang=" + c.lang + L"\n";
-    s += L"theme=" + c.theme + L"\n";
-    s += std::wstring(L"silent=") + (c.silent ? L"1" : L"0") + L"\n";
-    s += std::wstring(L"autostart=") + (c.autostart ? L"1" : L"0") + L"\n";
-    s += std::wstring(L"allsessions=") + (c.allSessions ? L"1" : L"0") + L"\n\n";
-    s += L"[guard]\n";
-    s += std::wstring(L"autoGuard=") + (c.autoGuard ? L"1" : L"0") + L"\n";
-    s += L"threshold=" + std::to_wstring(c.threshold) + L"\n";
-    s += L"cooldownSec=" + std::to_wstring(c.cooldownSec) + L"\n";
-    s += L"freeFloorMB=" + std::to_wstring(c.freeFloorMB) + L"\n";
-    s += L"standbyFloorMB=" + std::to_wstring(c.standbyFloorMB) + L"\n";
-    s += L"[clean]\n";
-    s += std::wstring(L"purgeLow=") + (c.purgeLow ? L"1" : L"0") + L"\n";
-    s += std::wstring(L"purgeFullManual=") + (c.purgeFullManual ? L"1" : L"0") + L"\n";
-    s += std::wstring(L"sysCache=") + (c.sysCache ? L"1" : L"0") + L"\n";
-    s += std::wstring(L"combinePages=") + (c.combinePages ? L"1" : L"0") + L"\n";
-    s += std::wstring(L"idleDeep=") + (c.idleDeep ? L"1" : L"0") + L"\n";
-    s += L"idleDeepSecs=" + std::to_wstring(c.idleDeepSecs) + L"\n";
-    s += L"idleDeepCooldownSec=" + std::to_wstring(c.idleDeepCooldownSec) + L"\n";
-    s += std::wstring(L"trimWS=") + (c.trimWS ? L"1" : L"0") + L"\n";
-    s += L"minWSAutoMB=" + std::to_wstring(c.minWSAutoMB) + L"\n";
-    s += L"idleSecs=" + std::to_wstring(c.idleSecs) + L"\n";
-    s += L"focusHistorySec=" + std::to_wstring(c.focusHistorySec) + L"\n";
-    s += L"whitelist=" + c.whitelist + L"\n\n";
-    s += L"[advanced]\n";
-    s += std::wstring(L"hotkey=") + (c.hotkey ? L"1" : L"0") + L"\n";
-    s += L"hotkeyCombo=" + c.hotkeyCombo + L"\n";
-    s += std::wstring(L"ecoQoS=") + (c.ecoQoS ? L"1" : L"0") + L"\n";
+    wchar_t buf[1024];
+    // 一次格式化主力标量项，省去 20 余次 std::to_wstring 与字符串临时拼接的代码膨胀
+    int n = swprintf(
+        buf, 1024,
+        L"# MemSweep config (UTF-8)\n"
+        L"[general]\nlang=%s\ntheme=%s\nsilent=%d\nautostart=%d\nallsessions=%d\n\n"
+        L"[guard]\nautoGuard=%d\nthreshold=%d\ncooldownSec=%d\nfreeFloorMB=%d\nstandbyFloorMB=%d\n"
+        L"[clean]\npurgeLow=%d\npurgeFullManual=%d\nsysCache=%d\ncombinePages=%d\n"
+        L"idleDeep=%d\nidleDeepSecs=%d\nidleDeepCooldownSec=%d\ntrimWS=%d\n"
+        L"minWSAutoMB=%d\nidleSecs=%d\nfocusHistorySec=%d\nwhitelist=",
+        c.lang.c_str(), c.theme.c_str(), (int)c.silent, (int)c.autostart, (int)c.allSessions,
+        (int)c.autoGuard, c.threshold, c.cooldownSec, c.freeFloorMB, c.standbyFloorMB,
+        (int)c.purgeLow, (int)c.purgeFullManual, (int)c.sysCache, (int)c.combinePages,
+        (int)c.idleDeep, c.idleDeepSecs, c.idleDeepCooldownSec, (int)c.trimWS,
+        c.minWSAutoMB, c.idleSecs, c.focusHistorySec);
+    std::wstring s(n > 0 ? buf : L"");
+    s += c.whitelist;
+    s += L"\n\n[advanced]\nhotkey=";
+    s += c.hotkey ? L"1\nhotkeyCombo=" : L"0\nhotkeyCombo=";
+    s += c.hotkeyCombo;
+    s += L"\necoQoS=";
+    s += c.ecoQoS ? L"1\n" : L"0\n";
     if (!WriteTextUtf8(ConfigPath(), s)) {
         Log(L"配置写入失败（磁盘满或被占用），本次修改未保存");
         return false;
@@ -444,11 +445,6 @@ bool IsElevated() {
     }
     return admin != FALSE;
 }
-bool IsCurrentSession(DWORD pid) {
-    DWORD sid = 0;
-    if (!ProcessIdToSessionId(pid, &sid)) return true;
-    return sid == g_selfSession;
-}
 
 // ---------------------------------------------------------------------------
 // 快照
@@ -458,7 +454,7 @@ bool QueryMemoryLists(Metrics& m) {
     ULONG ret = 0;
     NTSTATUS st = NtQuerySystemInformation(SIC_SystemMemoryListInformation, &ml, sizeof(ml), &ret);
     if (st != 0) {
-        m.freeBytes = m.standbyBytes = m.modifiedBytes = 0;
+        m.freeBytes = m.standbyBytes = 0;
         return false;
     }
     unsigned long long page = 4096;
@@ -466,7 +462,6 @@ bool QueryMemoryLists(Metrics& m) {
     GetSystemInfo(&si);
     if (si.dwPageSize) page = si.dwPageSize;
     m.freeBytes = (unsigned long long)(ml.ZeroPageCount + ml.FreePageCount) * page;
-    m.modifiedBytes = (unsigned long long)ml.ModifiedPageCount * page;
     unsigned long long sum = 0;
     for (int i = 0; i < 8; i++) {
         m.standbyByPrio[i] = (unsigned long long)ml.PageCountByPriority[i] * page;
@@ -478,7 +473,7 @@ bool QueryMemoryLists(Metrics& m) {
 
 bool QueryCompression(Metrics& m) {
     m.compressionOk = false;
-    m.compressedBytes = m.compressedLogical = 0;
+    m.compressedBytes = 0;
     m.compressionRatio = 0.0;
     SI_COMPRESSION_INFO ci{};
     ci.VersionSpare = 4;   // SYSTEM_STORE_COMPRESSION_INFORMATION_VERSION_V2 (24H2+)
@@ -492,8 +487,6 @@ bool QueryCompression(Metrics& m) {
     if (st != 0) return false;
     m.compressionOk = true;
     m.compressedBytes = (unsigned long long)ci.TotalCompressedSize;
-    m.compressedLogical = (unsigned long long)(ci.TotalUniqueDataCompressed ? ci.TotalUniqueDataCompressed
-                                                                           : ci.TotalDataCompressed);
     if (ci.TotalCompressedSize)
         m.compressionRatio = (double)ci.TotalUniqueDataCompressed / (double)ci.TotalCompressedSize;
     return true;
@@ -551,7 +544,6 @@ bool TakeSnapshot(Snapshot& s) {
         pi.ws = (unsigned long long)p->WorkingSetSize;
         pi.wsPrivate = (unsigned long long)p->WorkingSetPrivateSize;
         if (!pi.wsPrivate) pi.wsPrivate = pi.ws;   // 极少数系统进程该字段为 0
-        pi.commit = (unsigned long long)p->PagefileUsage;
         pi.createTime = (unsigned long long)p->CreateTime.QuadPart;
         pi.cpu100ns = (unsigned long long)p->UserTime.QuadPart + (unsigned long long)p->KernelTime.QuadPart;
         hfSum += p->HardFaultCount;
@@ -694,7 +686,8 @@ bool IsProtectedProcess(const ProcInfo& p, const std::unordered_set<DWORD>& prot
 // 单一候选判定（策略计数与执行共用，保证一致）
 static bool EligibleForTrim(const ProcInfo& p, const std::unordered_set<DWORD>& protPids,
                             const Config& c, bool requireIdle, int minWSMB, bool checkTrimMemory) {
-    if (!c.allSessions && !IsCurrentSession(p.pid)) return false;
+    // 会话 ID 已在 TakeSnapshot 时读入 p.sessionId，不必再对 400+ 进程逐个调 ProcessIdToSessionId
+    if (!c.allSessions && p.sessionId != g_selfSession) return false;
     if (p.ws < (unsigned long long)minWSMB * MB) return false;
     if (IsProtectedProcess(p, protPids)) return false;
     if (requireIdle && !IsIdle(p.pid)) return false;
@@ -781,8 +774,6 @@ CleanPlan PlanAuto(const Config& c, const Metrics& m, bool hasCandidates) {
         }
     }
     p.eco = c.ecoQoS;
-    p.minWSMB = c.minWSAutoMB;
-    p.requireIdle = !severe;
     return p;
 }
 
@@ -859,7 +850,8 @@ static void NoteTrim(const ProcInfo& p) {
     LeaveCriticalSection(&g_lock);
 }
 
-void RunClean(const CleanPlan& plan, const Config& c, CleanResult& r, HANDLE cancel) {
+void RunClean(const CleanPlan& plan, const Config& c, CleanResult& r, HANDLE cancel,
+              const Snapshot* initialSnap) {
     EnablePrivileges();
     SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_LOWEST);
     InterlockedExchange(&g_cleanPhase, 1);
@@ -879,8 +871,8 @@ void RunClean(const CleanPlan& plan, const Config& c, CleanResult& r, HANDLE can
         if (fpid) NoteFocus(fpid);
     }
 
-    Snapshot before;
-    if (!TakeSnapshot(before)) {
+    Snapshot ownBefore;
+    if (!initialSnap && !TakeSnapshot(ownBefore)) {
         // 拿不到清理前基线就中止：否则 before 是全 0，会把整块空闲内存算成“释放量”，
         // 气泡和日志都会报出几 GB 的假收益。
         Log(L"清理中止：无法读取清理前内存基线");
@@ -889,6 +881,7 @@ void RunClean(const CleanPlan& plan, const Config& c, CleanResult& r, HANDLE can
         DisablePrivileges();
         return;
     }
+    const Snapshot& before = initialSnap ? *initialSnap : ownBefore;
     r.availBefore = before.m.availPhys;
     r.freeBefore = before.m.freeBytes;
     r.standbyBefore = before.m.standbyBytes;
@@ -1040,7 +1033,13 @@ static DWORD WINAPI CleanThreadProc(LPVOID param) {
     if (g_hwnd) PostMessageW(g_hwnd, WM_APP_CLEANING, 1, 0);
 
     Snapshot s;
-    TakeSnapshot(s);
+    if (!TakeSnapshot(s)) {
+        Log(L"清理中止：无法读取清理前内存基线");
+        InterlockedExchange(&g_cleanPhase, 0);
+        if (g_hwnd) PostMessageW(g_hwnd, WM_APP_CLEANING, 0, 0);
+        InterlockedExchange(&g_cleaning, 0);
+        return 0;
+    }
     Config cfg = GetConfigSnapshot();
     size_t candidates = 0;
     if (!isAuto) {
@@ -1051,15 +1050,18 @@ static DWORD WINAPI CleanThreadProc(LPVOID param) {
     CleanPlan plan = isAuto ? PlanAuto(cfg, s.m, candidates > 0) : PlanManual(cfg);
 
     CleanResult r;
-    RunClean(plan, cfg, r);
+    RunClean(plan, cfg, r, nullptr, &s);
 
     if (isAuto) {
         g_lastAutoCleanMs = GetTickCount64();
     }
-    g_lastCleanWasAuto.store(isAuto, std::memory_order_relaxed);
-    g_lastFreeGain = r.freeGain;
-    g_lastAvailGain = r.availGain;
-    g_lastCleanTickMs = GetTickCount64();
+    // 异常中止且无净增益时不覆盖“上次清理”，避免把已有结果抹成 0
+    if (!r.aborted || r.freeGain > 0 || r.availGain > 0) {
+        g_lastCleanWasAuto.store(isAuto, std::memory_order_relaxed);
+        g_lastFreeGain = r.freeGain;
+        g_lastAvailGain = r.availGain;
+        g_lastCleanTickMs = GetTickCount64();
+    }
 
     LogCleanResult(isAuto ? L"自动" : L"手动", (size_t)r.candidates, r);
 
@@ -1087,8 +1089,12 @@ static DWORD WINAPI CleanThreadProc(LPVOID param) {
         else
             swprintf(info, 320, Tx(L"清理完成，可用 %s", L"Done, %s available"),
                      FormatBytes(r.availAfter).c_str());
-        PostMessageW(g_hwnd, WM_APP_BALLOON, isAuto ? 1 : 0, (LPARAM)new std::wstring(info));
-        if (isAuto) g_lastAutoNotifyMs.store(GetTickCount64());
+        auto* msgStr = new std::wstring(info);
+        if (!PostMessageW(g_hwnd, WM_APP_BALLOON, isAuto ? 1 : 0, (LPARAM)msgStr)) {
+            delete msgStr;
+        } else if (isAuto) {
+            g_lastAutoNotifyMs.store(GetTickCount64());
+        }
     }
     if (g_hwnd) {
         PostMessageW(g_hwnd, WM_APP_CLEANING, 0, 0);
@@ -1126,7 +1132,10 @@ void RequestManualClean(bool dryRun) {
     }
 
     Snapshot s;
-    TakeSnapshot(s);
+    if (!TakeSnapshot(s)) {
+        Log(L"【演练】失败：无法采集内存快照");
+        return;
+    }
     Config cfg = GetConfigSnapshot();
     size_t candidates = CountTrimCandidates(s, false, 8, cfg);
     CleanPlan plan = PlanManual(cfg);
@@ -1180,7 +1189,10 @@ static std::atomic<ULONGLONG> g_lastIdleDeepMs{0};
 static DWORD WINAPI IdleDeepThread(LPVOID) {
     Config cfg = GetConfigSnapshot();
     Snapshot s;
-    TakeSnapshot(s);
+    if (!TakeSnapshot(s)) {
+        InterlockedExchange(&g_cleaning, 0);
+        return 0;
+    }
     size_t candidates = CountTrimCandidates(s, true, cfg.minWSAutoMB, cfg);
 
     HANDLE cancel = CreateEventW(nullptr, TRUE, FALSE, nullptr);
@@ -1192,7 +1204,7 @@ static DWORD WINAPI IdleDeepThread(LPVOID) {
     Log(L"离开时维护开始：空闲候选 %d，计划 修剪=%d(%dMB) 低优先级=%d 合并页=%d",
         (int)candidates, (int)plan.trimWS, plan.minWSMB, (int)plan.purgeLow, (int)plan.combine);
     CleanResult r;
-    RunClean(plan, cfg, r, cancel);
+    RunClean(plan, cfg, r, cancel, &s);
 
     if (watcher) {
         if (stop) SetEvent(stop);
@@ -1323,6 +1335,8 @@ void MonitorTick() {
 }
 
 DWORD WINAPI MonitorThreadProc(LPVOID) {
+    // 首次采样只在这个线程里做，避免 UI 启动与 LowMemory 事件并发进入 MonitorTick
+    if (!g_quit) MonitorTick();
     while (!g_quit) {
         HANDLE hs[2] = {};
         DWORD n = 0;
@@ -1578,7 +1592,6 @@ bool SelfTest() {
     CleanPlan p8 = PlanAuto(c, m, false);
     chk(p8.purgeLow && !p8.purgeFull, L"hf 3999/s allows low-priority purge");
     g_hfPerSec.store(0.0);
-    g_hfPerSec.store(0.0);
 
     // 结果统计只取正向增量
     chk(Grow(100, 40) == 60 && Grow(40, 100) == 0, L"Grow only positive delta");
@@ -1590,9 +1603,21 @@ bool SelfTest() {
     chk(!IsProtectedName(L"notepad.exe"), L"notepad not protected");
     chk(TrimPid(0) == false && TrimPid(GetCurrentProcessId()) == false, L"TrimPid refuses self/idle");
 
-    // 格式化
-    chk(FormatBytes(1536ULL * MB) == L"1.5 GB", L"FormatBytes GB");
-    chk(FormatInt(1234567) == L"1,234,567", L"FormatInt");
+    // 格式化、进程名归一化与配置解析容错
+    chk(FormatBytes(1536ULL * MB) == L"1.5 GB" && FormatBytes(64ULL * MB) == L"64 MB" &&
+        FormatBytes(512ULL * KB) == L"512 KB", L"FormatBytes GB/MB/KB");
+    chk(NormalizeProcName(L"  Chrome.EXE ") == L"chrome" && NormalizeProcName(L"code") == L"code",
+        L"NormalizeProcName");
+    {
+        auto csv = SplitCSV(L" chrome.exe, idea64；vmmemwsl ; ");
+        chk(csv.size() == 3 && JoinCSV(csv) == L"chrome.exe, idea64, vmmemwsl", L"SplitCSV/JoinCSV");
+    }
+    chk(ParseConfigInt(L"85", 50) == 85, L"ParseConfigInt valid");
+    chk(ParseConfigInt(L"85x", 85) == 85 && ParseConfigInt(L"abc", 180) == 180,
+        L"ParseConfigInt invalid falls back to default");
+    chk(ParseConfigBool(L"on", false) && ParseConfigBool(L"yes", false) &&
+        !ParseConfigBool(L"off", true) && !ParseConfigBool(L"no", true) &&
+        ParseConfigBool(L"junk", true), L"ParseConfigBool tokens and fallback");
 
     // 热键字符串：解析、规范化与拒绝规则
     {

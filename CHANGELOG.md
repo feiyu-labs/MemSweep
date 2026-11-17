@@ -1,5 +1,22 @@
 # Changelog
 
+## v1.9.20 — 2026-11-18
+
+### 全链路审查与缺陷修复
+- **ARM64「关于」页架构识别**：改用 `_M_ARM64` / `__aarch64__` 判断，ARM64 设备不再误显示为 `x64`。
+- **系统操作线程安全**：`SysAction` 的确认对话框提前到 UI 线程执行，后台工作线程改用 `WM_APP_TOAST` 投递提示，消除跨线程访问 `g_hwnd`/`g_toast` 风险；`ExportDiagnostics` 与 `WriteUtf8File`/`WriteTextUtf8` 改为校验真实写入字节数并在失败时提示。
+- **启动采样与首页统计对齐**：初次 `MonitorTick()` 仅在 `MonitorThreadProc` 内执行，消除启动并发；首页「系统状态」卡片与 System Sheet 共用 `CountSysWarnings()` 同一套告警计数；多盘页面文件改用 `Measure-Object -Sum` 汇总。
+- **界面交互与绘制细节**：进程表增加 `g_procListDirty` 缓存，悬停重绘不再反复重建和排序；修复首次点击开关时从 0 跳变、设置按钮再次点击关闭未提交、`DrawSettingsSheet` 阈值截断与滑块四舍五入不一致、切换语言未同步重建编辑框字体、丢失鼠标捕获（`WM_CAPTURECHANGED`）以及右键修剪单个进程后未立即唤醒刷新等问题；隐藏窗口后同步停用 33ms 动画定时器，`WM_DESTROY` 清空 `g_hwnd` 并卸载 `SetWinEventHook`。
+- **共享读写与 CLI 并发**：`ReadTextFileW`、`ReadTextUtf8` 补齐共享读写删标志，导出诊断读取正在写入的日志不再触发共享冲突；`/clean` 全程持有实例互斥量防止并发清理重入；所有 `UI_Forward*` 均带等待主窗口重试。
+
+### 体积、构建与安装脚本
+- 清理死代码（`WM_APP_SAVED`、`FormatInt`、`Lerp`、`HotkeySpec::IsDefault`、`IsCurrentSession` 等）及每次扫描 ~450 次冗余 `ProcessIdToSessionId` 系统调用；`ConfigDir()` 结果缓存。
+- `SaveConfig()` 改用单块 `swprintf` 缓冲替代 25 次 `std::to_wstring` 拼接；Sheet 绘制函数标记 `noinline`；`build.cmd` 分离 `obj\app.res` / `obj\app_dev.res` / `obj\app_arm64.res` 并启用 `-fvisibility=hidden -fvisibility-inlines-hidden`。x64 正式版 422,912 字节（413 KB），ARM64 359,424 字节（351 KB）。
+- `install.cmd` 升级前先调用 `/exit` 优雅退出；`uninstall.cmd` 一并删除桌面快捷方式；同步 `res/app.manifest` 与 `res/app_dev.manifest` 版本号到 `1.9.20.0`。
+
+### 文案与文档复核
+- 按口语化与《中文文案排版指北》全面复核重做 UI 提示、`README.md`、`README.zh-CN.md`、`CODE_SIGNING.md`、`CODE_OF_CONDUCT.md`、`CONTRIBUTING.md`、`SECURITY.md`、`INSTALL.txt`、`docs/ENGINEERING.md` 与 winget 清单描述。
+
 ## v1.9.19 — 2026-11-17
 
 ### 全链路复核：15 项发现，逐项修复

@@ -95,12 +95,12 @@ PackageName: MemSweep
 PackageUrl: https://github.com/feiyu-labs/MemSweep
 License: MIT
 LicenseUrl: https://github.com/feiyu-labs/MemSweep/blob/main/LICENSE
-ShortDescription: Reclaims memory from idle background processes, without touching what you are using.
+ShortDescription: Reclaims memory from idle background processes without touching what you're using.
 Description: |-
-  A Windows memory cleaner that reclaims memory held by idle background processes
-  and leaves running applications alone. It cleans when memory use crosses the
-  threshold you set, and never flushes modified pages or sweeps every process.
-  Fully offline, with native x64 and ARM64 builds and no runtime dependencies.
+  MemSweep reclaims memory held by idle background processes while leaving running
+  applications alone. It cleans when memory use crosses the threshold you set,
+  and never flushes modified pages or sweeps every process. Works offline with
+  native x64 and ARM64 builds and no runtime dependencies.
 Moniker: memsweep
 Tags:
   - memory

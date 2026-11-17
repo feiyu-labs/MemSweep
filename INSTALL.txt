@@ -3,25 +3,27 @@ MemSweep
 
 English
 -------
-1. Right-click install.cmd -> Run as administrator.
-   Installs to C:\Program Files\MemSweep and registers a logon task plus a desktop shortcut.
-2. Tray icon: left-click opens the panel, right-click for the menu, middle-click cleans instantly.
+1. Right-click install.cmd and choose Run as administrator.
+   It installs MemSweep to C:\Program Files\MemSweep, registers a logon task,
+   and creates a desktop shortcut.
+2. Look for the MemSweep icon in the system tray: left-click opens the window,
+   right-click opens the menu, and middle-click cleans right away.
    Global hotkey: Ctrl+Shift+M (change it in Settings > Advanced).
-3. Uninstall: right-click uninstall.cmd -> Run as administrator.
-   Settings and logs stay in %APPDATA%\MemSweep (delete the folder to remove them).
-4. Portable use: put an empty MemSweep.ini next to MemSweep.exe before the first
-   launch, and settings and logs stay in that folder.
+3. To uninstall, right-click uninstall.cmd and choose Run as administrator.
+   Settings and logs stay in %APPDATA%\MemSweep (delete that folder to remove them).
+4. Portable mode: put an empty file named MemSweep.ini beside MemSweep.exe
+   before the first launch so settings and logs stay in the same folder.
 
 简体中文
 -------
-1. 右键 install.cmd -> 以管理员身份运行。
-   安装到 C:\Program Files\MemSweep，并创建开机计划任务与桌面快捷方式。
-2. 托盘出现图标：左键打开面板，右键菜单，中键秒清。
-   全局热键：Ctrl+Shift+M（可在 设置 → 高级设置 中修改）。
-3. 卸载：右键 uninstall.cmd -> 以管理员身份运行。
-   配置与日志保留在 %APPDATA%\MemSweep（如需彻底清除请手动删除）。
-4. 便携使用：首次启动前，在 MemSweep.exe 旁边放一个空的 MemSweep.ini，
-   配置与日志就保存在同一个文件夹里。
+1. 右键 install.cmd，选择「以管理员身份运行」。
+   脚本会把程序安装到 C:\Program Files\MemSweep，创建开机登录任务和桌面快捷方式。
+2. 托盘会出现 MemSweep 图标：左键打开窗口，右键打开菜单，中键立即清理。
+   全局热键：Ctrl+Shift+M（可在「设置 › 高级设置」中修改）。
+3. 卸载时右键 uninstall.cmd，选择「以管理员身份运行」。
+   配置与日志保留在 %APPDATA%\MemSweep（如需彻底清除，手动删除该目录即可）。
+4. 便携模式：首次启动前，在 MemSweep.exe 旁边放一个空的 MemSweep.ini，
+   配置和日志就会保存在同一个文件夹里。
 
 Source / Issues / Releases:
 https://github.com/feiyu-labs/MemSweep

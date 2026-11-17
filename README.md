@@ -53,9 +53,9 @@
 
 ## What it is
 
-MemSweep reclaims memory that idle background processes are holding, so what you're using keeps running normally. It's one executable: no drivers, no services, no network, and no system changes you didn't ask for.
+MemSweep reclaims memory held by idle background processes, so the apps you're using stay responsive. It's a single 413 KB executable with no drivers, background services, or network code.
 
-It exists because of how this tool category usually fails: cleaners that flush modified pages and freeze the whole machine (Mem Reduct issues, WinMemoryCleaner "Optimize freezes 3 out of 5 times"), utilities that clean on a fixed timer and take the shell down with them (CleanMem), and RAM "boosters" that lower a graph while making the next load slower. MemSweep takes the opposite bet: decide on real pressure, touch only idle background memory, and report what actually happened.
+Instead of flushing modified pages or sweeping every process on a fixed timer, it waits until memory is tight, trims only idle background apps, and logs what it freed.
 
 | | |
 |:---|:---|
@@ -67,14 +67,14 @@ It exists because of how this tool category usually fails: cleaners that flush m
 
 ## Features
 
-- **Automatic cleaning only touches idle background apps.** The app you're using, the processes that launched it, and anything you touched in the last two minutes stay untouched. An app qualifies after five minutes of near-zero CPU (the idle time is adjustable). Severe memory shortage also lets a pass trim background apps that are busy, and manual cleaning skips the idle wait.
-- **It cleans when memory is tight.** A pass starts when in-use memory crosses your threshold (85% by default), or when memory is genuinely short: under 512 MB available or 95% in use. RAM sitting in the standby list is normal Windows behaviour, not a shortage.
-- **It won't run operations that freeze Windows.** No modified-page flush, no registry-cache flush, no global working-set sweep, no timer changes, no killing processes.
-- **Duplicate pages can be merged.** Identical physical pages become one copy; it's manual, and pressing any key stops it.
-- **It can clean while you're away.** After ten minutes without input, when memory use or commit is high, it trims idle background apps and merges duplicate pages. Any input stops it.
-- **It shows what Windows is doing.** System status reports memory compression, page combining, SysMain, the pagefile, commit charge, kernel memory and WSL memory reclaim, and exports a diagnostic file.
-- **It stays quiet while you game or present.** No notifications during fullscreen games, presentations or Focus Assist, and automatic passes speak up only when they actually free memory.
-- **It's a 413 KB executable.** No runtime to install, about 3 MB in the tray, light and dark themes, English and Chinese, and a hotkey you can change (Ctrl+Shift+M by default).
+- **Automatic cleaning only touches idle background apps.** The app you're using, the processes that launched it, and anything you touched in the last two minutes stay untouched. Background apps qualify after five minutes of near-zero CPU (adjustable in Settings). During severe shortages, a pass can trim busy background apps too, and manual cleans skip the idle wait.
+- **It cleans when memory is tight.** A pass starts when in-use memory passes your threshold (85% by default), or when memory gets genuinely low: under 512 MB available or 95% in use. Standby cache is normal Windows behavior, not a shortage.
+- **It won't run operations that freeze Windows.** No modified-page flush, no registry-cache flush, no global working-set sweep, no timer changes, and no killing processes.
+- **Duplicate pages can be merged.** Identical physical pages become one copy; it runs manually and stops the moment you press a key.
+- **It can clean while you're away.** After ten minutes with no input, when memory use or commit charge is high, it trims idle background apps and merges duplicate pages. Any input stops it.
+- **It shows what Windows is doing.** System status reports memory compression, page combining, SysMain, the page file, commit charge, kernel memory, and WSL memory reclaim, and exports diagnostics.
+- **It stays quiet while you game or present.** No notifications during fullscreen games, presentations, or Focus Assist, and automatic passes notify only when they actually free memory.
+- **It runs from one 413 KB executable.** No runtime to install, about 3 MB in the tray, light and dark themes, English and Chinese, and a hotkey you can change (Ctrl+Shift+M by default).
 
 <table align="center">
   <tr>
@@ -97,13 +97,13 @@ It exists because of how this tool category usually fails: cleaners that flush m
 
 ## Install
 
-Download `MemSweep-v1.9.19-x64.zip` or `MemSweep-v1.9.19-arm64.zip` from [Releases](https://github.com/feiyu-labs/MemSweep/releases/latest), extract it, then right-click `install.cmd` and choose **Run as administrator**.
+Download `MemSweep-v1.9.20-x64.zip` or `MemSweep-v1.9.20-arm64.zip` from [Releases](https://github.com/feiyu-labs/MemSweep/releases/latest), extract it, then right-click `install.cmd` and choose **Run as administrator**.
 
-The script copies `MemSweep.exe` to `C:\Program Files\MemSweep\`, registers a logon task with elevated privileges so startup never prompts, adds a desktop shortcut and starts MemSweep in the tray.
+The script copies `MemSweep.exe` to `C:\Program Files\MemSweep\`, registers an elevated logon task so startup never prompts, adds a desktop shortcut, and starts MemSweep in the tray.
 
-To remove it, run `uninstall.cmd` as administrator. Settings and logs stay in `%APPDATA%\MemSweep\`.
+To remove it, right-click `uninstall.cmd` and choose **Run as administrator**. Settings and logs stay in `%APPDATA%\MemSweep\`.
 
-To keep settings and logs beside the program, put an empty file named `MemSweep.ini` in the same folder as `MemSweep.exe` before the first launch. Without it, both stay in `%APPDATA%\MemSweep\`.
+To keep settings and logs beside the program, put an empty file named `MemSweep.ini` in the same folder as `MemSweep.exe` before the first launch.
 
 ## Command line
 
@@ -122,22 +122,22 @@ MemSweep.exe /exit           :: shut down the running instance
 
 ## Footprint
 
-Windows 11 26H2 (26340), i7-12800HX, 24 GB RAM, 150% scaling. Figures are the private working set Task Manager reports.
+Measured on Windows 11 26H2 (26340), i7-12800HX, 24 GB RAM, 150% scaling. Figures are the private working set Task Manager reports.
 
 | State | Private working set | Private commit |
 |:---|:---:|:---:|
 | Window open | 9.5 MB | 12.2 MB |
-| Minimised to tray | 6.0 MB | 9.2 MB |
+| Minimized to tray | 6.0 MB | 9.2 MB |
 | Tray, settled | **3.0 MB** | 9.6 MB |
 
-A manual clean on this machine has reclaimed 1–3 GB of free pages; the amount depends on what is running at the time.
+A manual clean on this machine reclaims 1–3 GB of free pages depending on what's running.
 
 ## Compared with
 
 | | MemSweep | Mem Reduct | WinMemoryCleaner | Process Lasso (SmartTrim) | ISLC |
 |:---|:---:|:---:|:---:|:---:|:---:|
 | Binary size | 413 KB | ~373 KB (installer) | ~471 KB + .NET | ~3.6 MB installer, ~80 MB suite | ~1.5 MB |
-| Tray memory | 3.0 MB | not published | not published | not published | ~27 MB (measured by MakeUseOf) |
+| Tray memory | 3.0 MB | Not published | Not published | Not published | ~27 MB (measured by MakeUseOf) |
 | Foreground immunity | Window, parent chain, 120 s focus history | No | No | Exclusion list | No |
 | Trigger checks real pressure | Yes | No | No | Partial | Partial |
 | Modified-page flush | Never | Optional | Yes | No | No |
@@ -146,7 +146,7 @@ A manual clean on this machine has reclaimed 1–3 GB of free pages; the amount 
 | Native ARM64 | Yes | Yes | No | Yes | No |
 | Automatic mode omits freeze-prone lists | Yes | Optional | No | Optional | No |
 
-Latest versions as of November 2026: Mem Reduct 3.5.2, WinMemoryCleaner 3.0.8, Process Lasso 19.0, ISLC 1.0.4.8. Rows describe published defaults and documented behaviour; competitors change, so check their documentation before relying on a row. User-reported freezes in this category (Mem Reduct issues #17/#90, WinMemoryCleaner issue #192, ISLC forum threads) are what the trigger and notification design in MemSweep work around.
+Versions checked as of November 2026: Mem Reduct 3.5.2, WinMemoryCleaner 3.0.8, Process Lasso 19.0, and ISLC 1.0.4.8. Rows reflect published defaults and documented behavior; check each tool's docs for newer releases. User-reported freezes in this category (Mem Reduct issues #17/#90, WinMemoryCleaner issue #192, ISLC forum threads) shaped MemSweep's trigger and notification rules.
 
 ## Build from source
 
@@ -156,43 +156,39 @@ MemSweep builds with [Zig](https://ziglang.org/) as the C++ toolchain, so no Vis
 git clone https://github.com/feiyu-labs/MemSweep.git
 cd MemSweep
 
-build.cmd          :: release build  (dist\MemSweep.exe)
+build.cmd          :: release build (dist\MemSweep.exe)
 build.cmd test     :: dev build, self-test, idle check, headless UI renders
 build.cmd arm64    :: Windows on ARM64
 ```
 
-The pinned compiler is zig 0.17.1: place it in `../tools/` next to the repository, or point `ZIG` at `zig.exe`. Warnings are errors, and `build.cmd test` is what CI runs.
+The pinned compiler is zig 0.17.1: place it in `../tools/` next to the repository, or point `ZIG` at `zig.exe`. Warnings are errors, and CI runs `build.cmd test`.
 
 ## FAQ
 
 **The percentage didn't drop after cleaning.**
-That number counts in-use physical pages. When background processes are busy or protected, MemSweep reclaims standby cache instead, which shortens the next allocation rather than moving the percentage.
+That number counts in-use physical pages. When background processes are busy or protected, MemSweep reclaims standby cache instead, which speeds up the next allocation rather than moving the percentage.
 
 **Can it lower committed memory?**
-No. Commit is memory the system promised to applications; trimming moves pages between RAM, standby and the pagefile. Close applications or lower heap limits (`-Xmx`, `--max-old-space-size`) to reduce it.
+No. Commit charge is memory Windows promised to applications; trimming moves pages between RAM, standby, and the page file. Close applications or lower heap limits (`-Xmx`, `--max-old-space-size`) to reduce it.
 
 **Why does it need administrator rights?**
-Purging standby lists and trimming the file cache need system privileges. The installer registers a logon task, so daily use never prompts.
+Purging standby lists and trimming the file cache require system privileges. The installer registers an elevated logon task, so daily use never prompts.
 
 ## Privacy
 
-No network code: no telemetry, no automatic update checks, no data leaves the machine. The only outbound links open a browser when you click them. Configuration and logs stay in `%APPDATA%\MemSweep\`.
+MemSweep has no network code: no telemetry, no update checks, and nothing leaves your machine. Outbound links in the About page only open your browser when you click them. Settings and logs stay in `%APPDATA%\MemSweep\`.
 
 ## Community
 
-Bug reports and pull requests are welcome — see [CONTRIBUTING.md](CONTRIBUTING.md); report security issues privately as described in [SECURITY.md](SECURITY.md). Design decisions are in [docs/ENGINEERING.md](docs/ENGINEERING.md), and the research behind the thresholds in [RESEARCH.md](RESEARCH.md).
+Bug reports and pull requests are welcome—see [CONTRIBUTING.md](CONTRIBUTING.md). Report security issues privately as described in [SECURITY.md](SECURITY.md). Architecture notes live in [docs/ENGINEERING.md](docs/ENGINEERING.md), and threshold research in [RESEARCH.md](RESEARCH.md).
 
 ## Roadmap
 
-In order, driven by what users of this category keep asking for:
+1. **winget package and code signing** — install and update from the package manager without verifying hashes by hand.
+2. **Per-area cleaning switches** — toggle standby, file cache, and page combining individually with a dry-run preview of each.
+3. **Impact diagnostics** — compare hard-fault and reload-latency counters before and after a clean.
 
-1. **winget package and code signing** — install and update from the package manager without hash-checking by hand.
-2. **Per-area cleaning opt-in** — standby, file cache and page combining as explicit switches with a dry-run preview of what each would reclaim.
-3. **Impact diagnostics** — page-fault and reload-latency counters before and after a pass, so "did this help" has a measurement.
-
-A UI clean-history page was considered and deliberately skipped — the text log already records every pass (trigger, areas, reclaimed, duration), and keeping the app light wins over a second data surface.
-
-Things that will not be added: process termination, RAM "defragmentation", timer-resolution changes, anything that runs network code.
+Not planned: process termination, RAM "defragmentation", timer-resolution tweaks, or network features.
 
 ## License
 
