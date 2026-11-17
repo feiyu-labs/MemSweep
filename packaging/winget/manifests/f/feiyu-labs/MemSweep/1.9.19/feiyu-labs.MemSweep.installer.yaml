@@ -1,0 +1,22 @@
+# yaml-language-server: $schema=https://aka.ms/winget-manifest.installer.1.28.0.schema.json
+PackageIdentifier: feiyu-labs.MemSweep
+PackageVersion: 1.9.19
+Installers:
+  - Architecture: x64
+    InstallerType: zip
+    InstallerUrl: https://github.com/feiyu-labs/MemSweep/releases/download/v1.9.19/MemSweep-v1.9.19-x64.zip
+    InstallerSha256: 13CC8BABDFBE9F4E30C934AC7ED59928499A651FD357CD3AA92F788884EF3D59
+    NestedInstallerType: portable
+    NestedInstallerFiles:
+      - RelativeFilePath: MemSweep.exe
+        PortableCommandAlias: memsweep
+  - Architecture: arm64
+    InstallerType: zip
+    InstallerUrl: https://github.com/feiyu-labs/MemSweep/releases/download/v1.9.19/MemSweep-v1.9.19-arm64.zip
+    InstallerSha256: 7C7FC6A6363CA9251D7323E6123149BF71FF9D1422E2E601CDBC007D7894AB68
+    NestedInstallerType: portable
+    NestedInstallerFiles:
+      - RelativeFilePath: MemSweep.exe
+        PortableCommandAlias: memsweep
+ManifestType: installer
+ManifestVersion: 1.28.0
