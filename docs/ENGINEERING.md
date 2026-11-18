@@ -123,6 +123,10 @@ build.cmd test     :: dev + /selftest + /idlecheck + /uipng + /checkpng
 - **动效纪律**：动画步进只在 33ms 定时器（`StepAnimations`，帧率无关指数平滑）；
   环境动效固定 6.7fps、仅 可见+主屏+非清理，隐藏 0 开销；尊重 SPI_GETCLIENTAREAANIMATION；
   实测预算：可见 1.6%（单核）。禁止把动画推进写进数据刷新路径。
+- **清理候选地板只允许一处**：`RunClean` 的修剪/效率标记循环必须使用
+  `floorMB = plan.minWSMB > 0 ? plan.minWSMB : c.minWSAutoMB`。自动清理无候选时
+  `plan.minWSMB` 是 0，若直接拿它当阈值，会把几十 MB 的小进程也全部打上效率标记
+  （v2.0.3 实测 212 → 30 个）。
 - **重绘纪律**：`WM_PAINT` 按 `BeginPaint` 更新区做部分重绘（背景缓冲保留上一帧，
   `DrawAll(clip)` 仅栅格化失效区）；环境动效只失效仪表矩形；禁止全屏 Invalidate 的高频路径。
   **回缓冲必须是 DIB 段 + 兼容 DC（`BitBlt` 上屏），禁止用 GDI+ `DrawImage` 把 `Bitmap` 贴到窗口 DC**：

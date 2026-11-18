@@ -992,6 +992,9 @@ void RunClean(const CleanPlan& plan, const Config& c, CleanResult& r, HANDLE can
     // 2) 修剪工作集与/或后台效率标记（合并单循环）
     const bool compHigh = IsHighCompPressure(before.m);
     if (plan.trimWS || plan.eco) {
+        // 自动清理无修剪候选时 plan.minWSMB 为 0；此时效率标记必须回落到用户设定的
+        // 最小工作集，否则会把几十 MB 的小进程也全部打上标记（实测 212 个）。
+        const int floorMB = plan.minWSMB > 0 ? plan.minWSMB : c.minWSAutoMB;
         const DWORD access = (plan.trimWS ? PROCESS_SET_QUOTA : 0) |
                              PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_SET_INFORMATION;
         const ULONGLONG budget = (plan.trimWS && !plan.isAuto) ? 6000 : 2000;
@@ -1000,8 +1003,8 @@ void RunClean(const CleanPlan& plan, const Config& c, CleanResult& r, HANDLE can
                 r.aborted = true;
                 break;
             }
-            if (p.ws < (unsigned long long)plan.minWSMB * MB) break;   // 已降序
-            if (!EligibleForTrim(p, prot, c, plan.requireIdle, plan.minWSMB, plan.trimWS, compHigh)) continue;
+            if (p.ws < (unsigned long long)floorMB * MB) break;   // 已降序
+            if (!EligibleForTrim(p, prot, c, plan.requireIdle, floorMB, plan.trimWS, compHigh)) continue;
             // 保护集是清理开始时的快照；手动清理可跑 6 秒，期间用户可能切到别的应用。
             // 每轮再问一次当前前台，避免修剪刚切过去的窗口。
             if (ForegroundPid() == p.pid) continue;
