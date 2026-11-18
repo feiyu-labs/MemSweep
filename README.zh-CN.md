@@ -97,7 +97,7 @@ MemSweep 回收闲置后台进程占用的内存，你正在用的程序不受�
 
 ## 安装
 
-从 [Releases](https://github.com/feiyu-labs/MemSweep/releases/latest) 下载 `MemSweep-v2.0.3-x64.zip` 或 `MemSweep-v2.0.3-arm64.zip`，解压后右键 `install.cmd`，选择**以管理员身份运行**。
+从 [Releases](https://github.com/feiyu-labs/MemSweep/releases/latest) 下载 `MemSweep-v2.0.4-x64.zip` 或 `MemSweep-v2.0.4-arm64.zip`，解压后右键 `install.cmd`，选择**以管理员身份运行**。
 
 脚本会把 `MemSweep.exe` 复制到 `C:\Program Files\MemSweep\`，建一个高权限登录任务（开机不弹 UAC），加一个桌面快捷方式，然后启动到托盘。
 

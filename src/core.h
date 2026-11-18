@@ -50,6 +50,7 @@ extern HANDLE g_monEvent;
 extern std::atomic<ULONGLONG> g_lastAutoCleanMs;
 extern std::atomic<ULONGLONG> g_lastFreeGain;   // 真正空闲页的净增量（用户可感知）
 extern std::atomic<ULONGLONG> g_lastAvailGain;  // 可用内存净增量（含待机缓存）
+extern std::atomic<unsigned long long> g_lastCleanAvail; // 清理完成瞬间的可用内存
 extern std::atomic<ULONGLONG> g_lastCleanTickMs;
 extern std::atomic<bool> g_lastCleanWasAuto;   // 上次清理是否来自自动模式
 extern std::atomic<double> g_hfPerSec;

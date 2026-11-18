@@ -123,6 +123,13 @@ build.cmd test     :: dev + /selftest + /idlecheck + /uipng + /checkpng
 - **动效纪律**：动画步进只在 33ms 定时器（`StepAnimations`，帧率无关指数平滑）；
   环境动效固定 6.7fps、仅 可见+主屏+非清理，隐藏 0 开销；尊重 SPI_GETCLIENTAREAANIMATION；
   实测预算：可见 1.6%（单核）。禁止把动画推进写进数据刷新路径。
+- **动画只在主屏推进**：仪表缓动、光晕、涟漪、清理旋转仅当 `g_sheet == None` 时步进；
+  Sheet 打开时这些元素在遮罩后，继续推进会让 33ms 定时器整窗重绘（清理中尤其浪费）。
+  打开/关闭 Sheet 时把 `g_gaugeShown` 收敛到目标值，避免补播隐藏期间的动画。
+- **清理结果数字来源**：完成后的「可用」用 `g_lastCleanAvail`（清理线程记录的 `availAfter`），
+  不用监控快照（最多滞后 5 秒，会与「已释放」矛盾）。
+- **关闭效率模式必须可回滚**：`UpdateProcessTracking` 在 `!cfg.ecoQoS` 时对残留的
+  `ecoMarked`/`cpuRestrained` 做兜底恢复，覆盖「清理进行中关闭开关」的竞态。
 - **清理候选地板只允许一处**：`RunClean` 的修剪/效率标记循环必须使用
   `floorMB = plan.minWSMB > 0 ? plan.minWSMB : c.minWSAutoMB`。自动清理无候选时
   `plan.minWSMB` 是 0，若直接拿它当阈值，会把几十 MB 的小进程也全部打上效率标记

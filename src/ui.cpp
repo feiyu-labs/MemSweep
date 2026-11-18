@@ -529,6 +529,7 @@ static ULONGLONG g_cleanDoneAt = 0;   // 清理完成后的界面确认（6s）
 static std::wstring g_toast;
 static int g_lastPct = -1;
 static unsigned long long g_lastAvail = 0, g_lastStandby = 0;
+static int g_lastCommitPct = -1;
 static HANDLE g_monThread = nullptr;
 
 // 缓存值（避免每秒全窗重绘）
@@ -657,12 +658,13 @@ static void TrayUpdate(bool force) {
     // 图标没加上（登录时外壳还没就绪 / explorer 正在重启）就每次调用都重试 NIM_ADD，
     // 不能等百分比变化——否则这个会话里永远没有托盘图标。
     if (!g_trayOn) force = true;
-    int pct;
+    int pct, commitPct;
     unsigned long long avail, standby;
     EnterCriticalSection(&g_lock);
     pct = g_metrics.loadPct;
     avail = g_metrics.availPhys;
     standby = g_metrics.standbyBytes;
+    commitPct = (int)(g_metrics.commitPct + 0.5);
     LeaveCriticalSection(&g_lock);
     bool cleaning = g_cleaning != 0;
     // 图标只在百分比变化时重建（DIB+GDI+ 绘制开销大）；
@@ -670,11 +672,13 @@ static void TrayUpdate(bool force) {
     bool pctChanged = force || pct != g_lastPct;
     bool tipChanged = force || pctChanged
         || (avail / (8ULL * MB)) != (g_lastAvail / (8ULL * MB))
-        || (standby / (16ULL * MB)) != (g_lastStandby / (16ULL * MB));
+        || (standby / (16ULL * MB)) != (g_lastStandby / (16ULL * MB))
+        || commitPct != g_lastCommitPct;
     if (!pctChanged && !tipChanged) return;
     g_lastPct = pct;
     g_lastAvail = avail;
     g_lastStandby = standby;
+    g_lastCommitPct = commitPct;
     if (pctChanged || !g_trayOn) {
         HICON icon = MakeTrayIcon(pct, cleaning);
         if (g_trayIcon) DestroyIcon(g_trayIcon);
@@ -684,12 +688,8 @@ static void TrayUpdate(bool force) {
     } else {
         g_nid.uFlags = NIF_MESSAGE | NIF_TIP;
     }
-    double commitPct;
-    EnterCriticalSection(&g_lock);
-    commitPct = g_metrics.commitPct;
-    LeaveCriticalSection(&g_lock);
     wchar_t ct[32];
-    swprintf(ct, 32, L"%.0f%%", commitPct);
+    swprintf(ct, 32, L"%d%%", commitPct);
     std::wstring tip = L"MemSweep " + std::to_wstring(pct) + L"% · " +
                        Tx(L"可用 ", L"free ") + FormatBytes(avail) +
                        L" · " + Tx(L"已缓存 ", L"cached ") + FormatBytes(standby) +
@@ -1279,13 +1279,17 @@ static void DrawHome(Graphics& g) {
     if (justCleaned) {
         unsigned long long gain = g_lastFreeGain.load() > g_lastAvailGain.load()
                                 ? g_lastFreeGain.load() : g_lastAvailGain.load();
+        // 用清理完成瞬间的可用内存：监控快照最多落后 5 秒，直接读快照会把清理前的
+        // 旧数值贴在“已释放 X”后面，两个数字互相矛盾（v2.0.4）。
+        unsigned long long availNow = g_lastCleanAvail.load();
+        if (!availNow) availNow = m.availPhys;
         title = L"清理完成"; titleEn = L"Cleaned";
         if (gain >= 16ULL * MB)
             swprintf(doneSub, 96, Tx(L"已释放 %s · 可用 %s", L"Freed %s · %s available"),
-                     FormatBytes(gain).c_str(), FormatBytes(m.availPhys).c_str());
+                     FormatBytes(gain).c_str(), FormatBytes(availNow).c_str());
         else
             swprintf(doneSub, 96, Tx(L"可用 %s", L"%s available"),
-                     FormatBytes(m.availPhys).c_str());
+                     FormatBytes(availNow).c_str());
         sub = doneSub; subEn = doneSub;
         tc = T.accent;
     } else if (tidying) {
@@ -1976,14 +1980,20 @@ static bool StepAnimations() {
     if (dt > 0.25f) dt = 0.25f;
     g_lastAnimMs = now;
     bool need = false;
+    // 仪表/光晕/涟漪/清理旋转只在主屏可见时才需要逐帧重绘。
+    // Sheet 打开时它们全都在遮罩后面：继续推进会让 33ms 定时器整窗重绘，
+    // 清理过程中尤其浪费（v2.0.4）。
+    const bool homeVisible = (g_sheet == Sheet::None);
 
-    // 仪表缓动：指数平滑，任何掉帧后都能平滑收敛
-    if (g_gaugeShown != g_gaugeTarget) {
-        float diff = g_gaugeTarget - g_gaugeShown;
-        float t = 1.0f - expf(-dt * 10.0f);
-        if (fabsf(diff) < 0.05f) g_gaugeShown = g_gaugeTarget;
-        else g_gaugeShown += diff * t;
-        need = true;
+    if (homeVisible) {
+        // 仪表缓动：指数平滑，任何掉帧后都能平滑收敛
+        if (g_gaugeShown != g_gaugeTarget) {
+            float diff = g_gaugeTarget - g_gaugeShown;
+            float t = 1.0f - expf(-dt * 10.0f);
+            if (fabsf(diff) < 0.05f) g_gaugeShown = g_gaugeTarget;
+            else g_gaugeShown += diff * t;
+            need = true;
+        }
     }
     // 开关缓动
     for (int i = 0; i < g_animCount; i++) {
@@ -1996,25 +2006,28 @@ static bool StepAnimations() {
         if (fabsf(d) < 0.02f) g_anim[i].val = on ? 1.0f : 0.0f;
         else { g_anim[i].val += d * (1.0f - expf(-dt * 14.0f)); need = true; }
     }
-    // 清理旋转
-    if (g_cleaning != 0) {
-        g_spin += dt * 260.0f;
-        if (g_spin > 360) g_spin -= 360;
-        need = true;
+    if (homeVisible) {
+        // 清理旋转
+        if (g_cleaning != 0) {
+            g_spin += dt * 260.0f;
+            if (g_spin > 360) g_spin -= 360;
+            need = true;
+        }
+        // 悬停光晕缓动
+        float haloTarget = (g_hover == ID_RING_CLEAN && g_cleaning == 0) ? 1.0f : 0.0f;
+        if (fabsf(haloTarget - g_ringHalo) > 0.01f) {
+            g_ringHalo += (haloTarget - g_ringHalo) * (1.0f - expf(-dt * 18.0f));
+            need = true;
+        } else if (g_ringHalo != haloTarget) {
+            g_ringHalo = haloTarget;
+        }
+        // 涟漪存活期
+        if (g_ringPulseAt) {
+            if (now - g_ringPulseAt < 420) need = true;
+            else g_ringPulseAt = 0;
+        }
     }
-    // 悬停光晕缓动
-    float haloTarget = (g_hover == ID_RING_CLEAN && g_cleaning == 0) ? 1.0f : 0.0f;
-    if (fabsf(haloTarget - g_ringHalo) > 0.01f) {
-        g_ringHalo += (haloTarget - g_ringHalo) * (1.0f - expf(-dt * 18.0f));
-        need = true;
-    } else if (g_ringHalo != haloTarget) {
-        g_ringHalo = haloTarget;
-    }
-    // 涟漪 / Toast 存活期
-    if (g_ringPulseAt) {
-        if (now - g_ringPulseAt < 420) need = true;
-        else g_ringPulseAt = 0;
-    }
+    // Toast 在 Sheet 之上绘制，任何界面都要推进
     if (g_toast.size() && now - g_lastToastMs < 1900) need = true;
     return need;
 }
@@ -2136,6 +2149,10 @@ static void OpenSheet(Sheet s) {
     if (focus && focus != g_hwnd && GetParent(focus) == g_hwnd) SetFocus(g_hwnd);
     HideEdits();
     g_sheet = s;
+    // 主屏被遮罩盖住：直接收敛动画，避免 33ms 定时器在 Sheet 期间继续整窗重绘
+    g_gaugeShown = g_gaugeTarget;
+    g_ringHalo = 0;
+    g_ringPulseAt = 0;
     g_sheetT = AnimationsEnabled() && IsWindowVisible(g_hwnd) ? 0.0f : 1.0f;
     g_sheetStart = GetTickCount64();
     g_sheetAnimating = g_sheetT < 1.0f;
@@ -2164,6 +2181,9 @@ static void CloseSheet() {
     g_sheet = Sheet::None;
     g_sheetAnimating = false;
     g_sheetT = 1.0f;
+    g_gaugeShown = g_gaugeTarget;   // 回来直接显示当前值，不再补播隐藏期间的缓动
+    g_ringHalo = 0;
+    g_ringPulseAt = 0;
     if (g_hwnd) KillTimer(g_hwnd, 3);
     RECT rc{};
     GetClientRect(g_hwnd, &rc);
@@ -2380,6 +2400,7 @@ static DWORD WINAPI CombineThread(LPVOID) {
     if (r.ok) {
         g_lastFreeGain = Grow(r.freeAfter, r.freeBefore);
         g_lastAvailGain = Grow(r.availAfter, r.availBefore);
+        g_lastCleanAvail.store(r.availAfter);
         g_lastCleanTickMs = GetTickCount64();
         g_lastCleanWasAuto.store(false, std::memory_order_relaxed);   // 手动触发的深度清理
     }

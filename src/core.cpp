@@ -24,6 +24,7 @@ std::atomic<ULONGLONG> g_lastAutoCleanMs{0};
 static std::atomic<ULONGLONG> g_lastAutoFullPurgeMs{0};
 std::atomic<ULONGLONG> g_lastFreeGain{0};
 std::atomic<ULONGLONG> g_lastAvailGain{0};
+std::atomic<unsigned long long> g_lastCleanAvail{0};
 std::atomic<ULONGLONG> g_lastCleanTickMs{0};
 // 上一次清理是否由自动模式发起：界面用它区分「上次清理 / 上次自动清理」
 std::atomic<bool> g_lastCleanWasAuto{false};
@@ -1155,12 +1156,9 @@ static DWORD WINAPI CleanThreadProc(LPVOID param) {
         return 0;
     }
     Config cfg = GetConfigSnapshot();
-    size_t candidates = 0;
-    if (!isAuto) {
-        candidates = CountTrimCandidates(s, false, 8, cfg);
-    } else {
-        candidates = CountTrimCandidates(s, true, cfg.minWSAutoMB, cfg);
-    }
+    // 只有自动模式需要候选数来决定是否升级计划；手动清理的「候选」由 RunClean
+    // 按实际执行阈值统计（r.candidates），这里再扫一遍是白费一次全表遍历。
+    size_t candidates = isAuto ? CountTrimCandidates(s, true, cfg.minWSAutoMB, cfg) : 0;
     const ULONGLONG nowMs = GetTickCount64();
     CleanPlan plan = isAuto ? PlanAuto(cfg, s.m, candidates > 0, nowMs, g_lastAutoFullPurgeMs.load())
                             : PlanManual(cfg);
@@ -1178,6 +1176,7 @@ static DWORD WINAPI CleanThreadProc(LPVOID param) {
         g_lastCleanWasAuto.store(isAuto, std::memory_order_relaxed);
         g_lastFreeGain = r.freeGain;
         g_lastAvailGain = r.availGain;
+        g_lastCleanAvail.store(r.availAfter);
         g_lastCleanTickMs = doneMs;
     }
 
@@ -1334,6 +1333,7 @@ static DWORD WINAPI IdleDeepThread(LPVOID) {
     if (r.freeGain > 0 || r.availGain > 0) {
         g_lastFreeGain.store(r.freeGain);
         g_lastAvailGain.store(r.availGain);
+        g_lastCleanAvail.store(r.availAfter);
         g_lastCleanTickMs.store(GetTickCount64());
         g_lastCleanWasAuto.store(true, std::memory_order_relaxed);
     }
@@ -1397,6 +1397,15 @@ static void UpdateProcessTracking(const Snapshot& s, const Config& cfg, ULONGLON
             tr.hotTicks = prev->hotTicks;
             tr.ecoMarked = prev->ecoMarked;
             tr.cpuRestrained = prev->cpuRestrained;
+
+            // 关闭「后台效率模式」后，可能在清理线程里刚打上的标记还没撤销；
+            // 这里做兜底：下一个 tick 一并恢复，不让 LOW/EcoQoS 残留到进程结束。
+            if (!cfg.ecoQoS && (tr.ecoMarked || tr.cpuRestrained)) {
+                toRestore.push_back({ p.pid, p.createTime, p.name, tr.ecoMarked });
+                tr.ecoMarked = false;
+                tr.cpuRestrained = false;
+                tr.hotTicks = 0;
+            }
 
             unsigned long long delta = p.cpu100ns > prev->cpu100ns ? p.cpu100ns - prev->cpu100ns : 0;
             unsigned long long dtIdleMs = now > prev->lastMoveMs ? now - prev->lastMoveMs : 1;
