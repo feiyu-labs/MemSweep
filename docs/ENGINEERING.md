@@ -125,6 +125,16 @@ build.cmd test     :: dev + /selftest + /idlecheck + /uipng + /checkpng
   实测预算：可见 1.6%（单核）。禁止把动画推进写进数据刷新路径。
 - **重绘纪律**：`WM_PAINT` 按 `BeginPaint` 更新区做部分重绘（背景缓冲保留上一帧，
   `DrawAll(clip)` 仅栅格化失效区）；环境动效只失效仪表矩形；禁止全屏 Invalidate 的高频路径。
+  **回缓冲必须是 DIB 段 + 兼容 DC（`BitBlt` 上屏），禁止用 GDI+ `DrawImage` 把 `Bitmap` 贴到窗口 DC**：
+  后者每像素做格式转换，780×900 实测 12–34ms，`BitBlt` 为 0.7–1.6ms（v2.0.2）。
+  **Sheet 动画期间只失效卡片滑动带**（`InvalidateSheetSlide`），遮罩恒定后卡片外像素逐帧相同。
+- **遮罩不透明度禁止参与动画**：Sheet 打开时遮罩必须首帧到位；若让它从 0 淡入而卡片同时滑动，
+  周围 16px 边距会先亮后暗，看起来就是「卡片后面闪一圈白框」（v2.0.2 实机抓帧确认并修复）。
+- **绘制快照必须复制，不可 `std::swap`**：两次刷新之间可能没有新的监控发布（清理完成的
+  `WM_APP_STATS/CLEANING` 会强制刷新），交换会把上一次换出去的旧快照换回来，出现
+  「0 KB / 0 KB、可用 0 KB」而仪表仍为新指标（v2.0.2）。首个采样发布前不绘制任何数字。
+- **原生编辑框显示顺序**：无滑入动画时先 `InvalidateRect` + `UpdateWindow` 画出 Sheet，
+  再 `PositionEdits()` 显示 Edit；否则浅色编辑框会先闪在首页上。
 - **托盘纪律**：图标只在整数百分比变化时重建（DIB+GDI+ 绘制开销大）；
   tooltip 变化走 `NIF_TIP` 轻量更新；`Shell_NotifyIcon` IPC 不进入每秒路径。
 - **体积与容器纪律**：`-Oz + -fvisibility=hidden + -fvisibility-inlines-hidden + gc-sections + strip` 为该工具链实测最优，

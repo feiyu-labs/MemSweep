@@ -97,7 +97,7 @@ Instead of flushing modified pages or sweeping every process on a fixed timer, i
 
 ## Install
 
-Download `MemSweep-v2.0.1-x64.zip` or `MemSweep-v2.0.1-arm64.zip` from [Releases](https://github.com/feiyu-labs/MemSweep/releases/latest), extract it, then right-click `install.cmd` and choose **Run as administrator**.
+Download `MemSweep-v2.0.2-x64.zip` or `MemSweep-v2.0.2-arm64.zip` from [Releases](https://github.com/feiyu-labs/MemSweep/releases/latest), extract it, then right-click `install.cmd` and choose **Run as administrator**.
 
 The script copies `MemSweep.exe` to `C:\Program Files\MemSweep\`, registers an elevated logon task so startup never prompts, adds a desktop shortcut, and starts MemSweep in the tray.
 

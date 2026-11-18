@@ -543,8 +543,12 @@ static Snapshot g_drawSnap;
 static bool g_drawDirty = true;
 static bool g_procListDirty = true;
 static std::wstring g_topProcDesc;
-// 双缓冲
-static Bitmap* g_back = nullptr;
+// 双缓冲：DIB 段 + 兼容 DC。绘制仍走 GDI+，但上屏用 BitBlt 纯内存拷贝。
+// 之前用 GDI+ Bitmap + DrawImage，780x900 实测 20–30ms（逐像素转换、受内存压力放大），
+// BitBlt 通常 <2ms（v2.0.2）。
+static HBITMAP g_backDib = nullptr;
+static HGDIOBJ g_backOld = nullptr;
+static HDC g_backDC = nullptr;
 static Graphics* g_backG = nullptr;
 static int g_backW = 0, g_backH = 0;
 static ULONGLONG g_hiddenAt = 0;
@@ -1382,19 +1386,22 @@ static void DrawHome(Graphics& g) {
            L.gaugeCenter.Width, 18), f12, ringHover || cleaning ? T.accent : T.text3,
            StringAlignmentCenter);
 
-    wchar_t used[96];
-    swprintf(used, 96, L"%s / %s", FormatBytes(m.totalPhys - m.availPhys).c_str(),
-             FormatBytes(m.totalPhys).c_str());
-    TextAt(g, used, L.usedLine, f12, T.text2, StringAlignmentCenter);
-    wchar_t meta[160];
-    unsigned long long reclaim = g_reclaimableBytes.load();
-    if (reclaim >= 16ULL * MB)
-        swprintf(meta, 160, Tx(L"可释放约 %s · 可用 %s", L"~%s reclaimable · %s available"),
-                 FormatBytes(reclaim).c_str(), FormatBytes(m.availPhys).c_str());
-    else
-        swprintf(meta, 160, Tx(L"可用 %s", L"%s available"),
-                 FormatBytes(m.availPhys).c_str());
-    TextAt(g, meta, L.metaLine, f11, T.text3, StringAlignmentCenter);
+    // 首个监控采样发布前不要画 0 KB：宁可留白一帧，也不显示假数字
+    if (m.totalPhys) {
+        wchar_t used[96];
+        swprintf(used, 96, L"%s / %s", FormatBytes(m.totalPhys - m.availPhys).c_str(),
+                 FormatBytes(m.totalPhys).c_str());
+        TextAt(g, used, L.usedLine, f12, T.text2, StringAlignmentCenter);
+        wchar_t meta[160];
+        unsigned long long reclaim = g_reclaimableBytes.load();
+        if (reclaim >= 16ULL * MB)
+            swprintf(meta, 160, Tx(L"可释放约 %s · 可用 %s", L"~%s reclaimable · %s available"),
+                     FormatBytes(reclaim).c_str(), FormatBytes(m.availPhys).c_str());
+        else
+            swprintf(meta, 160, Tx(L"可用 %s", L"%s available"),
+                     FormatBytes(m.availPhys).c_str());
+        TextAt(g, meta, L.metaLine, f11, T.text3, StringAlignmentCenter);
+    }
 
     {
         bool hover = g_hover == ID_BTN_CLEAN;
@@ -1871,9 +1878,11 @@ static void DrawToast(Graphics& g) {
 static void RefreshDrawSnap() {
     if (!g_drawDirty) return;
     EnterCriticalSection(&g_lock);
-    // 交换而非拷贝：省掉每秒一次的全量进程表复制（455 项 ≈ 0.3ms）；
-    // g_snap 的旧内容留在 g_drawSnap 里，下一轮 TakeSnapshot 会整体覆盖。
-    std::swap(g_drawSnap, g_snap);
+    // 必须复制，不能 std::swap：两次刷新之间若没有新的监控发布（清理完成的
+    // WM_APP_STATS/CLEANING 会 force 刷新），第二次交换会把上一次换出去的旧快照
+    // 又换回来——首页于是出现「0 KB / 0 KB、可用 0 KB」而仪表仍是新指标（v2.0.2 修复）。
+    // 455 项复制约 0.3ms，相对绘制成本可忽略。
+    g_drawSnap = g_snap;
     LeaveCriticalSection(&g_lock);
     g_drawDirty = false;
     g_procListDirty = true;
@@ -1903,9 +1912,11 @@ static void DrawAll(Graphics& g, const RectF* clip) {
     } else {
         // Sheet 是模态的：首页不参与绘制。16px 边缘只会露出被裁切的首页碎片，
         // 看起来像元素错位；只留遮罩更干净，也省掉整屏首页绘制。
-        float et = EaseOutCubic(ClampF(g_sheetT, 0, 1));
-        BYTE sa = (BYTE)(205 * et);
-        SolidBrush scrim(C(sa, 8, 12, 18));
+        // 遮罩必须首帧即到位：它若随 g_sheetT 从 0 淡入，而卡片同时在滑动，
+        // 两者不同步——前几十毫秒四周 16px 边距仍是浅色背景，看起来就是
+        // 一圈白框闪一下再被压暗（v2.0.2 修复）。只保留卡片 16px 上滑。
+        const float et = EaseOutCubic(ClampF(g_sheetT, 0, 1));
+        SolidBrush scrim(C(205, 8, 12, 18));
         g.FillRectangle(&scrim, RectF(0, 0, L.w, L.h));
         GraphicsState st = g.Save();
         g.TranslateTransform(0, 16.0f * (1.0f - et));
@@ -2104,6 +2115,20 @@ static void FinishSheetAnim() {
     PositionEdits();
 }
 
+// 动画期间只有卡片在竖向移动：遮罩恒亮后，卡片外的像素逐帧完全相同。
+// 只失效「卡片最终位置 → 起始位置」这段带状区域，避免每帧重画整窗背景渐变。
+static void InvalidateSheetSlide() {
+    if (!g_hwnd) return;
+    float d = L.dpi;
+    RECT band{
+        (LONG)((L.sheet.X - 2) * d),
+        (LONG)((L.sheet.Y - 2) * d),
+        (LONG)((L.sheet.GetRight() + 2) * d),
+        (LONG)((L.sheet.GetBottom() + 18) * d)   // 起始帧整体下移 16px
+    };
+    InvalidateRect(g_hwnd, &band, FALSE);
+}
+
 static void OpenSheet(Sheet s) {
     if (g_sheet == s) return;
     CancelHotkeyCapture();
@@ -2123,10 +2148,13 @@ static void OpenSheet(Sheet s) {
     RECT rc{};
     GetClientRect(g_hwnd, &rc);
     BuildLayout((float)rc.right, (float)rc.bottom, L.dpi);
-    PositionEdits();
     if (s == Sheet::System) QuerySysInfoAsync();
     if (g_sheetAnimating) SetTimer(g_hwnd, 3, 16, nullptr);
     InvalidateRect(g_hwnd, nullptr, FALSE);
+    // 关闭系统动画时没有滑入过程：先把 Sheet 画出来，再显示原生编辑框，
+    // 否则编辑框会先闪在首页上（浅色小框）。
+    if (!g_sheetAnimating) UpdateWindow(g_hwnd);
+    PositionEdits();
 }
 
 static void CloseSheet() {
@@ -2550,11 +2578,29 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         GetClientRect(hwnd, &rc);
         int w = rc.right > 0 ? rc.right : 1;
         int h = rc.bottom > 0 ? rc.bottom : 1;
-        if (!g_back || g_backW != w || g_backH != h) {
+        if (!g_backDC || g_backW != w || g_backH != h) {
             delete g_backG; g_backG = nullptr;
-            delete g_back; g_back = nullptr;
-            g_back = new Bitmap(w, h, PixelFormat32bppPARGB);
-            g_backG = new Graphics(g_back);
+            if (g_backDC) {
+                if (g_backOld) SelectObject(g_backDC, g_backOld);
+                DeleteDC(g_backDC);
+                g_backDC = nullptr;
+                g_backOld = nullptr;
+            }
+            if (g_backDib) { DeleteObject(g_backDib); g_backDib = nullptr; }
+            BITMAPINFO bi{};
+            bi.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+            bi.bmiHeader.biWidth = w;
+            bi.bmiHeader.biHeight = -h;          // 自上而下，与 GDI+ 坐标一致
+            bi.bmiHeader.biPlanes = 1;
+            bi.bmiHeader.biBitCount = 32;
+            bi.bmiHeader.biCompression = BI_RGB;
+            HDC screenDC = GetDC(hwnd);
+            g_backDib = CreateDIBSection(screenDC, &bi, DIB_RGB_COLORS, nullptr, nullptr, 0);
+            g_backDC = CreateCompatibleDC(screenDC);
+            ReleaseDC(hwnd, screenDC);
+            if (g_backDib && g_backDC) g_backOld = SelectObject(g_backDC, g_backDib);
+            else if (g_backDC) { DeleteDC(g_backDC); g_backDC = nullptr; }
+            g_backG = g_backDC ? new Graphics(g_backDC) : nullptr;
             g_backW = w; g_backH = h;
         }
         if (g_backG) {
@@ -2574,12 +2620,8 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             g_backG->ResetTransform();
             g_backG->ResetClip();
             DrawAll(*g_backG, clipPtr);
-            Graphics screen(hdc);   // BeginPaint 已按更新区裁剪
-            screen.SetCompositingMode(CompositingModeSourceCopy);
-            screen.DrawImage(g_back,
-                             Rect(ru.left, ru.top, ru.right - ru.left, ru.bottom - ru.top),
-                             ru.left, ru.top, ru.right - ru.left, ru.bottom - ru.top,
-                             UnitPixel);
+            BitBlt(hdc, ru.left, ru.top, ru.right - ru.left, ru.bottom - ru.top,
+                   g_backDC, ru.left, ru.top, SRCCOPY);
         }
         EndPaint(hwnd, &ps);
         return 0;
@@ -2746,7 +2788,7 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             // 隐藏超过 20 秒释放双缓冲，降低托盘常驻内存
             if (!IsWindowVisible(hwnd)) {
                 if (!g_hiddenAt) g_hiddenAt = GetTickCount64();
-                else if (g_back && GetTickCount64() - g_hiddenAt > 20000) ReleaseBackBuffer();
+                else if (g_backDC && GetTickCount64() - g_hiddenAt > 20000) ReleaseBackBuffer();
             } else {
                 g_hiddenAt = 0;
             }
@@ -2777,10 +2819,11 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             if (!g_sheetAnimating) {
                 KillTimer(hwnd, 3);
             } else {
-                float t = (float)(GetTickCount64() - g_sheetStart) / 200.0f;
+                // 160ms：打开要利落，不做慢速淡入
+                float t = (float)(GetTickCount64() - g_sheetStart) / 160.0f;
                 g_sheetT = ClampF(t, 0.0f, 1.0f);
                 if (g_sheetT >= 1.0f) FinishSheetAnim();
-                InvalidateRect(hwnd, nullptr, FALSE);
+                InvalidateSheetSlide();
             }
         }
         return 0;
@@ -3660,7 +3703,9 @@ static int GetEncoderClsid(const WCHAR* format, CLSID* pClsid) {
 
 static void ReleaseBackBuffer() {
     delete g_backG; g_backG = nullptr;
-    delete g_back; g_back = nullptr;
+    if (g_backDC && g_backOld) { SelectObject(g_backDC, g_backOld); g_backOld = nullptr; }
+    if (g_backDC) { DeleteDC(g_backDC); g_backDC = nullptr; }
+    if (g_backDib) { DeleteObject(g_backDib); g_backDib = nullptr; }
     g_backW = g_backH = 0;
 }
 static void DestroyGdiObjects() {
