@@ -1,20 +1,20 @@
 # yaml-language-server: $schema=https://aka.ms/winget-manifest.installer.1.28.0.schema.json
 PackageIdentifier: feiyu-labs.MemSweep
-PackageVersion: 2.0.2
+PackageVersion: 2.0.3
 InstallerType: zip
 NestedInstallerType: portable
 ElevationRequirement: elevationRequired
 ReleaseDate: 2026-11-18
 Installers:
   - Architecture: x64
-    InstallerUrl: https://github.com/feiyu-labs/MemSweep/releases/download/v2.0.2/MemSweep-v2.0.2-x64.zip
-    InstallerSha256: AD6ACEF8598C80780078F707D57CF8A3B8D15E9F1B7AEFAABACF743C834175F0
+    InstallerUrl: https://github.com/feiyu-labs/MemSweep/releases/download/v2.0.3/MemSweep-v2.0.3-x64.zip
+    InstallerSha256: 76D5FC929440049E3D1EBFBA19A84F55F2DDC27BB207F52759379837D6960DBB
     NestedInstallerFiles:
       - RelativeFilePath: MemSweep.exe
         PortableCommandAlias: memsweep
   - Architecture: arm64
-    InstallerUrl: https://github.com/feiyu-labs/MemSweep/releases/download/v2.0.2/MemSweep-v2.0.2-arm64.zip
-    InstallerSha256: BBD58AB2CE1A3BF5D04512E6A38653009D727882148DCF7E7690476627E44442
+    InstallerUrl: https://github.com/feiyu-labs/MemSweep/releases/download/v2.0.3/MemSweep-v2.0.3-arm64.zip
+    InstallerSha256: 4B4072DB8AE47B61347C85CA677AB889ADB9BC6CA153B60371E3066E0009D9B9
     NestedInstallerFiles:
       - RelativeFilePath: MemSweep.exe
         PortableCommandAlias: memsweep
