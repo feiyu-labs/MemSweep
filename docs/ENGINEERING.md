@@ -121,8 +121,21 @@ build.cmd test     :: dev + /selftest + /idlecheck + /uipng + /checkpng
 - 命中：Sheet 打开时只注册 Sheet 控件 + 四周 scrim；主屏/窗口按钮不可点。
 - 性能：Sheet 高度 340–568 DIP；无页面过渡缓冲；空闲只跑 1s 指标刷新。
 - **动效纪律**：动画步进只在 33ms 定时器（`StepAnimations`，帧率无关指数平滑）；
-  环境动效固定 6.7fps、仅 可见+主屏+非清理，隐藏 0 开销；尊重 SPI_GETCLIENTAREAANIMATION；
-  实测预算：可见 1.6%（单核）。禁止把动画推进写进数据刷新路径。
+  环境动效（Timer 4，6.7fps）仅在 **窗口前台活跃（`g_wndActive`）+ 可见 + 主屏 + 非清理** 时运行，
+  窗口失焦（`WM_ACTIVATE WA_INACTIVE`）立即 `KillTimer(4)`，隐藏/最小化立即 `KillTimer(1..4)` 做到 0 唤醒；
+  禁止只判断 `IsWindowVisible`（被其他窗口盖住时仍为真，v2.0.5 实测 21 小时后台空绘吃掉 577s CPU）；
+  尊重 SPI_GETCLIENTAREAANIMATION；禁止把动画推进写进数据刷新路径。
+- **EcoQoS 与 Win11 定时器节流纪律**：开启效率模式时按位 OR 传入 `EXECUTION_SPEED | IGNORE_TIMER_RESOLUTION (0x4)`
+  （Win10 失败回退仅 `EXECUTION_SPEED`）；恢复时必须写 `ControlMask=0, StateMask=0` 交回系统管理，
+  禁止写 `ControlMask=EXECUTION_SPEED, StateMask=0`（微软文档明确后者会把进程锁死强制 HighQoS）。
+- **自动清理防空跑与预算纪律**：手动清理/离开维护完成后同步刷新 `g_lastAutoCleanMs`；
+  `RunClean` 修剪循环的 2000ms/6000ms 预算必须从循环进入处独立计时（`trimT0`），不得被前置 `PurgeStandby` 耗光；
+  `PlanAuto` 仅在 P0 待机页 ≥ 32MB 时派发低优清理，连续低收益（<64MB）按指数退避冷却（真实 OOM 可用 <512MB 不退避）；
+  95% 负载但可用 ≥512MB 时全量待机清理仍遵守 10 分钟冷却。
+- **可见窗/有声进程保护与 ProBalance 滞回**：`BuildProtectedPids(s, true)` 在清理和后台让路时按需收集
+  Z 序未被遮挡的可见顶层窗（`DWMWA_CLOAKED` 过滤）与 WASAPI 活跃音频会话进程（`eConsole` + `eCommunications`），
+  闲时零调用；动态 CPU 让路仅在用户活跃（`!IsUserIdle(30)`）且总 CPU ≥35%（单进程 ≥12%）或单后台 ≥25% 时介入，
+  已让路进程设 15s 最短保持期再按 <4% 恢复，防止编译/GC 波动反复横跳。
 - **动画只在主屏推进**：仪表缓动、光晕、涟漪、清理旋转仅当 `g_sheet == None` 时步进；
   Sheet 打开时这些元素在遮罩后，继续推进会让 33ms 定时器整窗重绘（清理中尤其浪费）。
   打开/关闭 Sheet 时把 `g_gaugeShown` 收敛到目标值，避免补播隐藏期间的动画。

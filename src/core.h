@@ -92,8 +92,12 @@ struct CleanPlan {
 // 不能单独作为“系统快没内存”的判据。
 bool IsSeverePressure(const Metrics& m);
 
+// 低收益自适应退避：连续低收益时放大自动冷却（最多 4×，上限 10 分钟）
+int EffectiveAutoCooldownSec(int baseSec, int lowGainStreak);
+
 // 自动触发判定：使用中 >= 阈值 或 真实压力；冷却期内不触发
-bool ShouldTriggerAuto(const Config& c, const Metrics& m, ULONGLONG nowMs, ULONGLONG lastAutoMs);
+bool ShouldTriggerAuto(const Config& c, const Metrics& m, ULONGLONG nowMs,
+                       ULONGLONG lastAutoMs, int lowGainStreak = 0);
 
 // 自动计划：空闲后台修剪 + 条件性低优先级缓存清理；
 // 真实压力或空闲页严重枯竭（有冷却保护）时才升级全量缓存，绝不自动合并页。

@@ -553,6 +553,7 @@ static HDC g_backDC = nullptr;
 static Graphics* g_backG = nullptr;
 static int g_backW = 0, g_backH = 0;
 static ULONGLONG g_hiddenAt = 0;
+static bool g_wndActive = false;
 static HWINEVENTHOOK g_fgHook = nullptr;
 
 static ULONG_PTR g_gdiToken = 0;
@@ -577,6 +578,7 @@ static bool AnimationsEnabled();
 static int GetEncoderClsid(const WCHAR* format, CLSID* pClsid);
 static void DestroyGdiObjects();
 static void ReleaseBackBuffer();
+static void SyncUiTimers(HWND hwnd, int visOverride = -1);
 static void ShowToast(const std::wstring& msg) {
     g_toast = msg;
     g_lastToastMs = GetTickCount64();
@@ -1957,7 +1959,10 @@ static void UpdateStats(bool force) {
         g_sc.commit = m.commitUsed;
         g_sc.hf = m.hardFaultsPerSec;
         g_gaugeTarget = (float)m.loadPct;
-        KickAnim();   // 数值变化立即进入 33ms 缓动，不再 1s 步进
+        if (g_hwnd && IsWindowVisible(g_hwnd) && !IsIconic(g_hwnd))
+            KickAnim();   // 数值变化立即进入 33ms 缓动，不再 1s 步进
+        else
+            g_gaugeShown = g_gaugeTarget;
     }
     TrayUpdate(force);
     // 自身瘦身（每分钟一次）
@@ -2079,8 +2084,37 @@ static CtlId HitTest(float x, float y, CtlKind* kind = nullptr) {
     }
     return ID_NONE;
 }
+static void SyncUiTimers(HWND hwnd, int visOverride) {
+    if (!hwnd) return;
+    const bool visible = (visOverride >= 0) ? (visOverride != 0)
+                                            : (IsWindowVisible(hwnd) && !IsIconic(hwnd));
+    if (!visible) {
+        // 托盘隐藏/最小化期间关闭全部 UI 定时器，做到 0 唤醒、不打断 CPU 节能状态
+        KillTimer(hwnd, 1);
+        KillTimer(hwnd, 2);
+        KillTimer(hwnd, 3);
+        KillTimer(hwnd, 4);
+        g_gaugeShown = g_gaugeTarget;
+        g_ringHalo = 0;
+        g_ringPulseAt = 0;
+        return;
+    }
+    SetTimer(hwnd, 1, 1000, nullptr);
+    // 6.7fps 仪表环境光晕只在窗口真正前台活跃且停在主屏非清理态时运行；
+    // 窗口被别的程序盖住（!g_wndActive）或打开 Sheet 后立即停掉，避免后台空绘吃 CPU（v2.0.5）。
+    const bool wantAmbient = g_wndActive &&
+                             g_sheet == Sheet::None &&
+                             g_cleaning == 0 &&
+                             AnimationsEnabled();
+    if (wantAmbient) {
+        g_lastAmbientMs = 0;
+        SetTimer(hwnd, 4, 150, nullptr);
+    } else {
+        KillTimer(hwnd, 4);
+    }
+}
 static void KickAnim() {
-    if (!g_hwnd) return;
+    if (!g_hwnd || !IsWindowVisible(g_hwnd) || IsIconic(g_hwnd)) return;
     SetTimer(g_hwnd, 2, 33, nullptr);
     InvalidateRect(g_hwnd, nullptr, FALSE);
 }
@@ -2167,6 +2201,7 @@ static void OpenSheet(Sheet s) {
     BuildLayout((float)rc.right, (float)rc.bottom, L.dpi);
     if (s == Sheet::System) QuerySysInfoAsync();
     if (g_sheetAnimating) SetTimer(g_hwnd, 3, 16, nullptr);
+    SyncUiTimers(g_hwnd);
     InvalidateRect(g_hwnd, nullptr, FALSE);
     // 关闭系统动画时没有滑入过程：先把 Sheet 画出来，再显示原生编辑框，
     // 否则编辑框会先闪在首页上（浅色小框）。
@@ -2185,6 +2220,7 @@ static void CloseSheet() {
     g_ringHalo = 0;
     g_ringPulseAt = 0;
     if (g_hwnd) KillTimer(g_hwnd, 3);
+    SyncUiTimers(g_hwnd);
     RECT rc{};
     GetClientRect(g_hwnd, &rc);
     BuildLayout((float)rc.right, (float)rc.bottom, L.dpi);
@@ -2578,9 +2614,7 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         BuildLayout((float)rc.right, (float)rc.bottom, L.dpi);
         PositionEdits();
 
-        SetTimer(hwnd, 1, 1000, nullptr);
-        SetTimer(hwnd, 4, 150, nullptr);   // 环境动效心跳（6.7fps，可见主屏才工作）
-        SetTimer(hwnd, 2, 33, nullptr);
+        SyncUiTimers(hwnd, 0);
         TrayUpdate(true);
         UpdateStats(true);
         return 0;
@@ -2650,9 +2684,20 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     case WM_ERASEBKGND:
         return 1;
     case WM_SHOWWINDOW:
-        if (!wp) ReleaseBackBuffer();   // 托盘/最小化后不再占用 1–3MB 双缓冲
-        else InvalidateRect(hwnd, nullptr, FALSE);
+        if (!wp) {
+            g_wndActive = false;
+            ReleaseBackBuffer();   // 托盘/最小化后不再占用 1–3MB 双缓冲
+            SyncUiTimers(hwnd, 0);
+        } else {
+            if (g_cleanDoneAt && GetTickCount64() - g_cleanDoneAt >= 6000) g_cleanDoneAt = 0;
+            SyncUiTimers(hwnd, 1);
+            InvalidateRect(hwnd, nullptr, FALSE);
+        }
         return 0;
+    case WM_ACTIVATE:
+        g_wndActive = (LOWORD(wp) != WA_INACTIVE);
+        SyncUiTimers(hwnd);
+        break;
     case WM_PRINTCLIENT: {
         HDC dc = (HDC)wp;
         Graphics g(dc);
@@ -2660,12 +2705,18 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         return 0;
     }
     case WM_SIZE: {
-        if (wp == SIZE_MINIMIZED) { ReleaseBackBuffer(); return 0; }
+        if (wp == SIZE_MINIMIZED) {
+            g_wndActive = false;
+            ReleaseBackBuffer();
+            SyncUiTimers(hwnd, 0);
+            return 0;
+        }
         RECT rc;
         GetClientRect(hwnd, &rc);
         float dpi = L.dpi;
         BuildLayout((float)rc.right, (float)rc.bottom, dpi);
         PositionEdits();
+        SyncUiTimers(hwnd, IsWindowVisible(hwnd) ? 1 : 0);
         InvalidateRect(hwnd, nullptr, FALSE);
         return 0;
     }
@@ -2800,29 +2851,27 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         return 0;
     case WM_TIMER:
         if (wp == 1) {
+            if (!IsWindowVisible(hwnd) || IsIconic(hwnd)) { SyncUiTimers(hwnd, 0); return 0; }
             if (g_sheet == Sheet::System) QuerySysInfo(false);
             UpdateStats(false);
             if (g_cleanDoneAt && GetTickCount64() - g_cleanDoneAt >= 6000) {
                 g_cleanDoneAt = 0;
                 InvalidateRect(hwnd, nullptr, FALSE);
             }
-            // 隐藏超过 20 秒释放双缓冲，降低托盘常驻内存
-            if (!IsWindowVisible(hwnd)) {
-                if (!g_hiddenAt) g_hiddenAt = GetTickCount64();
-                else if (g_backDC && GetTickCount64() - g_hiddenAt > 20000) ReleaseBackBuffer();
-            } else {
-                g_hiddenAt = 0;
-            }
+            g_hiddenAt = 0;
         }
         else if (wp == 2) {
-            if (!IsWindowVisible(hwnd)) { KillTimer(hwnd, 2); return 0; }
+            if (!IsWindowVisible(hwnd) || IsIconic(hwnd)) { KillTimer(hwnd, 2); return 0; }
             if (StepAnimations()) InvalidateRect(hwnd, nullptr, FALSE);
             else KillTimer(hwnd, 2);
         }
         else if (wp == 4) {
-            // 环境动效（10fps 预算）：仅 可见 + 主屏 + 非清理；隐藏/Sheet 内 0 开销
-            if (!IsWindowVisible(hwnd) || g_sheet != Sheet::None ||
-                g_cleaning != 0 || !AnimationsEnabled()) return 0;
+            // 环境动效（6.7fps 预算）：仅 前台活跃 + 主屏 + 非清理；被遮挡/隐藏/Sheet 内停定时器 0 开销
+            if (!g_wndActive || !IsWindowVisible(hwnd) || IsIconic(hwnd) ||
+                g_sheet != Sheet::None || g_cleaning != 0 || !AnimationsEnabled()) {
+                KillTimer(hwnd, 4);
+                return 0;
+            }
             ULONGLONG nowA = GetTickCount64();
             float dtA = g_lastAmbientMs ? (float)(nowA - g_lastAmbientMs) / 1000.0f : 0.1f;
             if (dtA > 0.5f) dtA = 0.5f;
@@ -2890,6 +2939,7 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             g_cleanDoneAt = GetTickCount64();
             g_ringPulseAt = g_cleanDoneAt;
         }
+        SyncUiTimers(hwnd);
         KickAnim();
         TrayUpdate(true);
         return 0;
@@ -2939,8 +2989,7 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         } else if (ev == WM_MBUTTONUP) {
             RequestManualClean(false);
         } else if (ev == NIN_BALLOONUSERCLICK) {
-            ShowWindow(hwnd, SW_SHOW);
-            SetForegroundWindow(hwnd);
+            BringMainToFront();
         }
         return 0;
     }

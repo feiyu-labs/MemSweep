@@ -14,7 +14,7 @@
 
 <p align="center">
   <a href="https://github.com/feiyu-labs/MemSweep/releases/latest"><b>Download for Windows</b></a><br>
-  Windows 10 and 11 · x64 and ARM64 · 398 KB
+  Windows 10 and 11 · x64 and ARM64 · 403 KB
 </p>
 
 <p align="center">
@@ -22,7 +22,7 @@
   <a href="https://github.com/feiyu-labs/MemSweep/releases/latest"><img src="https://img.shields.io/github/v/release/feiyu-labs/MemSweep?color=emerald" alt="Release"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="License"></a>
   <img src="https://img.shields.io/badge/platform-Windows%2010%20%7C%2011%20(x64%2C%20ARM64)-blue" alt="Platform">
-  <img src="https://img.shields.io/badge/binary-398%20KB-success" alt="Binary size">
+  <img src="https://img.shields.io/badge/binary-403%20KB-success" alt="Binary size">
   <img src="https://img.shields.io/badge/tray-3%20MB-success" alt="Tray memory">
   <img src="https://img.shields.io/badge/network-none-green" alt="No network access">
 </p>
@@ -53,14 +53,14 @@
 
 ## What it is
 
-MemSweep reclaims memory held by idle background processes, so the apps you're using stay responsive. It's a single 398 KB executable with no drivers, background services, or network code.
+MemSweep reclaims memory held by idle background processes, so the apps you're using stay responsive. It's a single 403 KB executable with no drivers, background services, or network code.
 
 Instead of flushing modified pages or sweeping every process on a fixed timer, it waits until memory is tight, trims only idle background apps, and logs what it freed.
 
 | | |
 |:---|:---|
 | **Platform** | Windows 10 and 11, native x64 and ARM64 builds |
-| **Size** | 398 KB binary, no runtime dependencies |
+| **Size** | 403 KB binary, no runtime dependencies |
 | **Memory** | 9.5 MB open · 3.0 MB in the tray |
 | **Requirements** | Administrator rights for cleaning; the installer registers a logon task, so daily use never prompts |
 | **License** | MIT |
@@ -74,7 +74,7 @@ Instead of flushing modified pages or sweeping every process on a fixed timer, i
 - **It won't run operations that freeze Windows.** No modified-page flush, no registry-cache flush, no global working-set sweep, no timer changes, and no killing processes.
 - **Duplicate pages can be merged.** Identical physical pages become one copy; it runs manually in Deep cleanup or while you're away and stops the moment you press a key.
 - **It checks what Windows is doing.** System status reports compression, page combining, SysMain, the page file, commit charge, kernel memory, and WSL memory reclaim, and exports diagnostics.
-- **It stays quiet and light.** No notifications during fullscreen games, presentations, or Focus Assist; one 398 KB file, about 3 MB in the tray, light and dark themes, English and Chinese, and a customizable hotkey (Ctrl+Shift+M by default).
+- **It stays quiet and light.** No notifications during fullscreen games, presentations, or Focus Assist; one 403 KB file, about 3 MB in the tray, light and dark themes, English and Chinese, and a customizable hotkey (Ctrl+Shift+M by default).
 
 <table align="center">
   <tr>
@@ -97,7 +97,7 @@ Instead of flushing modified pages or sweeping every process on a fixed timer, i
 
 ## Install
 
-Download `MemSweep-v2.0.4-x64.zip` or `MemSweep-v2.0.4-arm64.zip` from [Releases](https://github.com/feiyu-labs/MemSweep/releases/latest), extract it, then right-click `install.cmd` and choose **Run as administrator**.
+Download `MemSweep-v2.0.5-x64.zip` or `MemSweep-v2.0.5-arm64.zip` from [Releases](https://github.com/feiyu-labs/MemSweep/releases/latest), extract it, then right-click `install.cmd` and choose **Run as administrator**.
 
 The script copies `MemSweep.exe` to `C:\Program Files\MemSweep\`, registers an elevated logon task so startup never prompts, adds a desktop shortcut, and starts MemSweep in the tray.
 
@@ -136,7 +136,7 @@ A manual clean on this machine reclaims 1–3 GB of free pages depending on what
 
 | | MemSweep | Mem Reduct | WinMemoryCleaner | Process Lasso (SmartTrim) | ISLC |
 |:---|:---:|:---:|:---:|:---:|:---:|
-| Binary size | 398 KB | ~373 KB (installer) | ~471 KB + .NET | ~3.6 MB installer, ~80 MB suite | ~1.5 MB |
+| Binary size | 403 KB | ~373 KB (installer) | ~471 KB + .NET | ~3.6 MB installer, ~80 MB suite | ~1.5 MB |
 | Tray memory | 3.0 MB | Not published | Not published | Not published | ~27 MB (measured by MakeUseOf) |
 | Foreground immunity | Window, parent chain, 120 s focus history | No | No | Exclusion list | No |
 | Trigger checks real pressure | Yes | No | No | Partial | Partial |

@@ -179,6 +179,15 @@ PagefileUsage@184` 全部正确；`SYSTEM_MEMORY_LIST_INFORMATION`（22×SIZE_T�
 - v2.0 在「后台效率模式」下新增 `NtSetInformationProcess(ProcessIoPriority = 33, IO_PRIORITY_LOW = 1)` 与基于 `MonitorTick` 的可逆动态 CPU 让路（非前台、非保护后台进程连续 2 个采样周期占满 `≥ 12%` 总 CPU 时临时降为 `BELOW_NORMAL_PRIORITY_CLASS`，低于 `5%`、切回前台、关闭开关或退出时立即恢复 `NORMAL_PRIORITY_CLASS`）。
 - 在 v2.0.1 中按「短小精简」原则将 5 套每进程哈希表与重复辅助函数整合为单一 `PidTrack` 有序表，并移除不进 UI 的 10 秒事后复核状态机与冗余诊断区段，最终包体回落至 398 KB（小于 v1.9.20 的 413 KB）。
 
+### 8.4 50 小时实机使用数据复核与 2026-11 同赛道/Win11 前沿对照（v2.0.5，2026-11-22）
+
+统计 2026-11-20 11:19 至 2026-11-22 13:09 共 50 小时本机日志（1,683 行，800 次自动清理，46 次后台让路）与实时运行态，并对照 Process Lasso 18.2.2（ProBalance / SmartTrim）、EnergyStarZ 1.2.0、Mem Reduct 3.5.2、Wise Memory Optimizer 4.2.4、Microsoft PC Manager 与微软 Learn `SetProcessInformation` 官方文档，定位并修复 5 项高价值硬伤（0 新增 UI 开关，x64 403 KB / ARM64 343 KB）：
+
+1. **被遮挡窗口后台空绘（最大耗电源）**：本机 `v2.0.4` 面板打开后被其他窗口盖住，`IsWindowVisible()` 仍为真，150ms 环境光环（Timer 4）持续空绘 21 小时累计吃掉 **577.17s CPU**（实测 15s 增量 359.4ms = **2.4% 单核**）。改为 `WM_ACTIVATE` 失焦停 Timer 4、隐藏/最小化停全部 4 个定时器做到 0 唤醒。
+2. **手动清完 1 秒自动追打 + 修剪预算错位 + P0 空跑 + 无退避**：50 小时内 800 次自动清理中 33%（264 次）净收益 `< 50 MB`，含 81 次 0 候选 P0 空跑；7 次手动清理里 3 次在 1–53 秒内被自动清理追打；21 次触发 `修剪预算用尽（2000ms）`（甚至已处理 0 个），根因是 `t0` 把前置 `PurgeStandby` 算进了修剪预算；95% 负载有 1GB 待机时连发 3 次全量清空致 4–9s 抖动。全部修复并加入连续低收益（`< 64 MB`）自适应冷却退避。
+3. **EcoQoS 恢复语义与 Win11 时钟节流**：微软官方文档证实 `ControlMask=EXECUTION_SPEED, StateMask=0` 是强制关闭 EcoQoS（锁死 HighQoS），真正交回系统调度应为 `ControlMask=0, StateMask=0`；开启时在 Win11 上同次按位 OR `PROCESS_POWER_THROTTLING_IGNORE_TIMER_RESOLUTION (0x4)` 抑制后台 1ms 时钟唤醒。
+4. **可见窗 + WASAPI 音频保护 + ProBalance 滞回**：50 小时日志出现 `yysls.exe`（1 次）与 `MuMuVMMHeadless.exe`（3 次）被误让路、`java.exe` 反复抖动 41 次（每 10 秒升降）。引入 Z 序遮挡感知的可见顶层窗（含 `DWMWA_CLOAKED` 过滤）+ 按需 WASAPI 活跃音频保护（`eConsole` + `eCommunications`），以及总 CPU ≥ 35% 争用门控 + 15 秒最短保持滞回。
+
 **永不做**：脏页刷盘、注册表刷盘、全局一刀切、定时器分辨率 hack、结束/挂起进程、联网/遥测。
 
 ---
