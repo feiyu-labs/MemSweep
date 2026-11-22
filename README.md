@@ -67,14 +67,14 @@ Instead of flushing modified pages or sweeping every process on a fixed timer, i
 
 ## Features
 
-- **Automatic cleaning only touches idle background apps.** The app you're using, the processes that launched it, and anything you touched in the last two minutes stay untouched. Background apps qualify after five minutes of near-zero CPU (adjustable in Settings). When memory compression is high, MemSweep spaces out repeat trims so apps don't bounce right back.
+- **Automatic cleaning only touches idle background apps.** Your active window, any visible window on screen, apps playing audio, their parent processes, and anything you touched in the last two minutes stay untouched. Background apps qualify after five minutes of near-zero CPU (adjustable in Settings). When memory compression is high, MemSweep spaces out repeat trims, and it eases off automatically when consecutive runs free little memory.
 - **It clears real bottlenecks instead of spinning on 0 MB.** A pass starts when in-use memory passes your threshold (85% by default) or memory gets low. When free pages stay starved even though gigabytes sit in higher-priority standby cache, automatic passes can clear the full standby list once every ten minutes when paging is calm.
-- **Efficiency mode lowers busy background CPU, disk I/O, and memory priority.** When turned on in Advanced settings, busy non-foreground processes temporarily yield CPU and I/O priority while you work, and return to normal the moment they settle or you switch back to them.
+- **Efficiency mode lowers busy background CPU, disk I/O, and memory priority.** When turned on in Advanced settings, busy non-foreground processes yield CPU and I/O priority only during real CPU contention, curb background timer wakeups on Windows 11, and return cleanly to Windows scheduling the moment they settle or you switch back to them.
 - **Processes are grouped by app.** Chrome, Electron, and IDE windows roll up into one total per app, so you can see who's holding memory, protect the whole app in one click, or right-click to free all its background instances at once.
 - **It won't run operations that freeze Windows.** No modified-page flush, no registry-cache flush, no global working-set sweep, no timer changes, and no killing processes.
 - **Duplicate pages can be merged.** Identical physical pages become one copy; it runs manually in Deep cleanup or while you're away and stops the moment you press a key.
 - **It checks what Windows is doing.** System status reports compression, page combining, SysMain, the page file, commit charge, kernel memory, and WSL memory reclaim, and exports diagnostics.
-- **It stays quiet and light.** No notifications during fullscreen games, presentations, or Focus Assist; one 403 KB file, about 3 MB in the tray, light and dark themes, English and Chinese, and a customizable hotkey (Ctrl+Shift+M by default).
+- **It stays quiet and light.** No notifications during fullscreen games, presentations, or Focus Assist; UI timers stop when the window is in the tray or behind other apps (0 ms user CPU); one 403 KB file, light and dark themes, English and Chinese, and a customizable hotkey (Ctrl+Shift+M by default).
 
 <table align="center">
   <tr>
@@ -126,27 +126,27 @@ Measured on Windows 11 26H2 (26340), i7-12800HX, 24 GB RAM, 150% scaling. Figure
 
 | State | Private working set | Private commit |
 |:---|:---:|:---:|
-| Window open | 9.5 MB | 12.2 MB |
-| Minimized to tray | 6.0 MB | 9.2 MB |
-| Tray, settled | **3.0 MB** | 9.6 MB |
+| Window open | 9.5 MB | 11.8 MB |
+| Minimized to tray | 6.0 MB | 6.9 MB |
+| Tray, settled | **3–5 MB** | 6.9 MB |
 
-A manual clean on this machine reclaims 1–3 GB of free pages depending on what's running.
+In the tray or behind other apps, MemSweep stops its UI timers and averages about **0.2% of one CPU core** (0 ms user CPU). A manual clean on this machine reclaims 1–3 GB of free pages depending on what's running.
 
 ## Compared with
 
 | | MemSweep | Mem Reduct | WinMemoryCleaner | Process Lasso (SmartTrim) | ISLC |
 |:---|:---:|:---:|:---:|:---:|:---:|
 | Binary size | 403 KB | ~373 KB (installer) | ~471 KB + .NET | ~3.6 MB installer, ~80 MB suite | ~1.5 MB |
-| Tray memory | 3.0 MB | Not published | Not published | Not published | ~27 MB (measured by MakeUseOf) |
-| Foreground immunity | Window, parent chain, 120 s focus history | No | No | Exclusion list | No |
+| Tray memory | 3–5 MB | Not published | Not published | Not published | ~27 MB (measured by MakeUseOf) |
+| Foreground immunity | Active, visible windows, audio, parent chain, 120 s history | No | No | Exclusion list | No |
 | Trigger checks real pressure | Yes | No | No | Partial | Partial |
 | Modified-page flush | Never | Optional | Yes | No | No |
-| Page combining | Yes, abortable | No | No | No | No |
+| Page combining | Yes, abortable | Yes (not abortable) | No | No | No |
 | Clean record | Text log + diagnostics export | Text log | JSON event log | Yes | No |
 | Native ARM64 | Yes | Yes | No | Yes | No |
 | Automatic mode omits freeze-prone lists | Yes | Optional | No | Optional | No |
 
-Versions checked as of November 2026: Mem Reduct 3.5.2, WinMemoryCleaner 3.0.8, Process Lasso 19.0, and ISLC 1.0.4.8. Rows reflect published defaults and documented behavior; check each tool's docs for newer releases. User-reported freezes in this category (Mem Reduct issues #17/#90, WinMemoryCleaner issue #192, ISLC forum threads) shaped MemSweep's trigger and notification rules.
+Versions checked as of November 2026: Mem Reduct 3.5.2, WinMemoryCleaner 3.0.8, Process Lasso 18.2.2, and ISLC 1.0.4.6. Rows reflect published defaults and documented behavior; check each tool's docs for newer releases. User-reported freezes in this category (Mem Reduct issues #17/#90, WinMemoryCleaner issue #192, ISLC forum threads) shaped MemSweep's trigger and notification rules.
 
 ## Build from source
 
