@@ -2,8 +2,8 @@
 #pragma once
 
 // 单一版本源：UI 关于页、诊断导出、日志共用；资源文件 res/app.rc 仍需手动同步。
-#define MEMSWEEP_VERSION      L"2.0.5"
-#define MEMSWEEP_VERSION_FULL L"2.0.5.0"
+#define MEMSWEEP_VERSION      L"2.1.0"
+#define MEMSWEEP_VERSION_FULL L"2.1.0.0"
 
 
 #define WIN32_LEAN_AND_MEAN
@@ -116,7 +116,11 @@ struct HotkeySpec {
     static std::wstring KeyLabel(UINT vk) {
         if (vk >= 'A' && vk <= 'Z') return std::wstring(1, (wchar_t)vk);
         if (vk >= '0' && vk <= '9') return std::wstring(1, (wchar_t)vk);
-        if (vk >= VK_F1 && vk <= VK_F24) return L"F" + std::to_wstring(vk - VK_F1 + 1);
+        if (vk >= VK_F1 && vk <= VK_F24) {
+            wchar_t b[8];
+            swprintf(b, 8, L"F%u", (unsigned)(vk - VK_F1 + 1));
+            return b;
+        }
         if (vk == VK_SPACE) return L"Space";
         if (vk == VK_ESCAPE) return L"Esc";   // 能显示，但会被 IsReservedHotkey 拒掉
         return L"";
@@ -232,7 +236,8 @@ struct Config {
     int   idleSecs          = 300;
     int   focusHistorySec   = 120;
 
-    std::wstring whitelist  = L"qemu-system-i386, vmmemwsl";
+    // 内置保护已硬锁定系统关键进程与 QEMU/WSL 虚拟机，用户保护名单默认留空
+    std::wstring whitelist;
 
     bool  hotkey            = true;
     std::wstring hotkeyCombo = L"Ctrl+Shift+M";   // 语法见 HotkeySpec，老配置缺省即默认值

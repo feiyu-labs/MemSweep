@@ -13,7 +13,7 @@ struct Metrics {
     unsigned long long availPhys = 0;      // 可用（空闲 + 待机）
     unsigned long long freeBytes = 0;      // 真正空闲（zero + free list）
     unsigned long long standbyBytes = 0;   // 待机缓存合计
-    unsigned long long standbyByPrio[8] = {};
+    unsigned long long standbyP0Bytes = 0; // Priority 0 低优先级待机缓存
     unsigned long long commitUsed = 0;
     unsigned long long commitLimit = 0;
     unsigned long long hardFaultsCumulative = 0;
@@ -30,7 +30,7 @@ struct Metrics {
 
 struct ProcInfo {
     DWORD pid = 0, ppid = 0, sessionId = 0;
-    unsigned long long ws = 0, wsPrivate = 0, cpu100ns = 0, createTime = 0;
+    unsigned long long ws = 0, wsPrivate = 0, commitPriv = 0, cpu100ns = 0, createTime = 0;
     std::wstring name;
 };
 
@@ -139,8 +139,17 @@ struct AppMemAgg {
     std::wstring name, display;
     int count = 0;
     unsigned long long priv = 0;
+    unsigned long long commitPriv = 0;
 };
 std::vector<AppMemAgg> AggregateApps(const Snapshot& s);
+
+struct PageFileStat {
+    unsigned long long allocMB = 0;
+    unsigned long long useMB = 0;
+    unsigned long long peakMB = 0;
+    std::wstring firstPath;
+};
+bool QueryPageFileStats(PageFileStat& out);
 
 struct CleanResult {
     bool standbyLow = false, standbyFull = false, cache = false;
@@ -151,7 +160,6 @@ struct CleanResult {
     int  trimmed = 0, attempted = 0, eco = 0, candidates = 0;
     unsigned long long availBefore = 0, availAfter = 0, availGain = 0;
     unsigned long long freeBefore = 0, freeAfter = 0, freeGain = 0;
-    unsigned long long standbyBefore = 0, standbyAfter = 0;
     unsigned long long durationMs = 0;
 };
 
@@ -164,10 +172,11 @@ void RequestManualClean(bool dryRun = false);
 // ---------------------------------------------------------------------------
 // 监控与自检
 // ---------------------------------------------------------------------------
-void MonitorTick();
 DWORD WINAPI MonitorThreadProc(LPVOID);
+#ifdef MS_DEV
 bool SelfTest();
 void DumpIdleDiagnostics();
+#endif
 
 // 焦点跟踪（UI 的 WinEvent 钩子调用）
 void NoteFocus(DWORD pid);

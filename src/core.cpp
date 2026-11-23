@@ -116,6 +116,7 @@ NTSTATUS NTAPI NtSetInformationProcess(HANDLE hProc, ULONG cls, PVOID info, ULON
 }
 
 static constexpr ULONG SIC_SystemProcessInformation      = 5;
+static constexpr ULONG SIC_SystemPagefileInformation     = 18;
 static constexpr ULONG SIC_SystemMemoryListInformation   = 80;
 static constexpr ULONG SIC_SystemFileCacheInformationEx  = 81;
 static constexpr ULONG SMLC_MemoryPurgeStandbyList       = 4;
@@ -124,6 +125,101 @@ static constexpr ULONG PIC_ProcessIoPriority             = 33;
 static constexpr ULONG IO_PRIORITY_LOW                   = 1;
 static constexpr ULONG IO_PRIORITY_NORMAL                = 2;
 static constexpr ULONG STATUS_INFO_LENGTH_MISMATCH       = 0xC0000004;
+
+// 动态解析 Win10/11 CPU Sets API（自动识别 Intel P/E 核与 AMD 非对称双 CCD，将后台重进程柔绑至能效核/次 CCD）
+typedef BOOL (WINAPI *PFN_GetSystemCpuSetInformation)(PSYSTEM_CPU_SET_INFORMATION, ULONG, PULONG, HANDLE, ULONG);
+typedef BOOL (WINAPI *PFN_SetProcessDefaultCpuSets)(HANDLE, const ULONG*, ULONG);
+static PFN_SetProcessDefaultCpuSets g_pSetProcCpuSets = nullptr;
+static std::vector<ULONG> g_bgCpuSetIds;
+static bool g_topoInited = false;
+static unsigned long long g_pageSize = 4096;
+
+static void InitCpuTopologyOnce() {
+    if (g_topoInited) return;
+    g_topoInited = true;
+    SYSTEM_INFO si{};
+    GetSystemInfo(&si);
+    if (si.dwPageSize) g_pageSize = si.dwPageSize;
+    if (si.dwNumberOfProcessors) g_cpuCount = si.dwNumberOfProcessors;
+
+    HMODULE k32 = GetModuleHandleW(L"kernel32.dll");
+    if (!k32) return;
+    auto pGet = (PFN_GetSystemCpuSetInformation)(void*)GetProcAddress(k32, "GetSystemCpuSetInformation");
+    g_pSetProcCpuSets = (PFN_SetProcessDefaultCpuSets)(void*)GetProcAddress(k32, "SetProcessDefaultCpuSets");
+    if (!pGet || !g_pSetProcCpuSets) return;
+
+    ULONG len = 0;
+    pGet(nullptr, 0, &len, nullptr, 0);
+    if (!len || len > (1 << 20)) return;
+    std::vector<unsigned char> buf(len);
+    if (!pGet((PSYSTEM_CPU_SET_INFORMATION)buf.data(), len, &len, nullptr, 0)) return;
+
+    struct CpuRec { ULONG id; WORD group; BYTE lp; BYTE llc; BYTE eff; };
+    std::vector<CpuRec> recs;
+    recs.reserve(64);
+    BYTE minEff = 255, maxEff = 0;
+    for (ULONG off = 0; off + 24 <= len; ) {
+        auto* item = (const SYSTEM_CPU_SET_INFORMATION*)(buf.data() + off);
+        if (item->Size == 0 || off + item->Size > len) break;
+        if (item->Type == CpuSetInformation) {
+            const auto& cs = item->CpuSet;
+            recs.push_back({ cs.Id, cs.Group, cs.LogicalProcessorIndex, cs.LastLevelCacheIndex, cs.EfficiencyClass });
+            if (cs.EfficiencyClass < minEff) minEff = cs.EfficiencyClass;
+            if (cs.EfficiencyClass > maxEff) maxEff = cs.EfficiencyClass;
+        }
+        off += item->Size;
+    }
+    if (recs.size() < 4) return;
+
+    // 情况 A：Intel 混合架构（EfficiencyClass 存在多档）→ 最低档即 E-Core
+    if (maxEff > minEff) {
+        for (const auto& r : recs)
+            if (r.eff == minEff) g_bgCpuSetIds.push_back(r.id);
+    } else {
+        // 情况 B：AMD 非对称双 CCD（如 X3D，不同 LLC 域 L3 容量不同）→ 较小 L3 域作为后台核
+        DWORD clen = 0;
+        GetLogicalProcessorInformationEx(RelationCache, nullptr, &clen);
+        if (clen && clen <= (1 << 20)) {
+            std::vector<unsigned char> cbuf(clen);
+            if (GetLogicalProcessorInformationEx(RelationCache,
+                    (PSYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX)cbuf.data(), &clen)) {
+                struct L3Dom { WORD group; KAFFINITY mask; DWORD size; };
+                std::vector<L3Dom> l3s;
+                DWORD maxL3 = 0, minL3 = 0xFFFFFFFFu;
+                for (DWORD off = 0; off + sizeof(LOGICAL_PROCESSOR_RELATIONSHIP) + sizeof(DWORD) <= clen; ) {
+                    auto* ex = (const SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX*)(cbuf.data() + off);
+                    if (ex->Size == 0 || off + ex->Size > clen) break;
+                    if (ex->Relationship == RelationCache && ex->Cache.Level == 3) {
+                        DWORD sz = ex->Cache.CacheSize;
+                        l3s.push_back({ ex->Cache.GroupMask.Group, ex->Cache.GroupMask.Mask, sz });
+                        if (sz > maxL3) maxL3 = sz;
+                        if (sz < minL3) minL3 = sz;
+                    }
+                    off += ex->Size;
+                }
+                if (l3s.size() > 1 && maxL3 > minL3) {
+                    for (const auto& r : recs) {
+                        for (const auto& d : l3s) {
+                            if (d.size < maxL3 && d.group == r.group && r.lp < 64 &&
+                                (d.mask & ((KAFFINITY)1ULL << r.lp))) {
+                                g_bgCpuSetIds.push_back(r.id);
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    // 后台核至少保留 2 个逻辑处理器，避免单核饿死后台任务
+    if (g_bgCpuSetIds.size() < 2) g_bgCpuSetIds.clear();
+}
+
+static bool SetBgCpuSets(HANDLE h, bool on) {
+    if (!g_pSetProcCpuSets || g_bgCpuSetIds.empty()) return false;
+    if (on) return g_pSetProcCpuSets(h, g_bgCpuSetIds.data(), (ULONG)g_bgCpuSetIds.size()) != 0;
+    return g_pSetProcCpuSets(h, nullptr, 0) != 0;
+}
 
 #pragma pack(push, 8)
 struct SI_UNICODE_STRING { USHORT Length; USHORT MaximumLength; PWSTR Buffer; };
@@ -236,22 +332,25 @@ std::wstring ReadTextUtf8(const std::wstring& path) {
     LARGE_INTEGER sz{};
     GetFileSizeEx(h, &sz);
     if (sz.QuadPart <= 0 || sz.QuadPart > (16 << 20)) { CloseHandle(h); return L""; }
-    std::string raw((size_t)sz.QuadPart, 0);
+    std::vector<char> raw((size_t)sz.QuadPart);
     DWORD rd = 0;
     if (!ReadFile(h, raw.data(), (DWORD)raw.size(), &rd, nullptr)) rd = 0;
     CloseHandle(h);
-    raw.resize(rd);
-    if (raw.size() >= 3 && (unsigned char)raw[0] == 0xEF && (unsigned char)raw[1] == 0xBB && (unsigned char)raw[2] == 0xBF)
-        raw = raw.substr(3);
-    int wl = MultiByteToWideChar(CP_UTF8, 0, raw.data(), (int)raw.size(), nullptr, 0);
+    const char* p = raw.data();
+    size_t len = rd;
+    if (len >= 3 && (unsigned char)p[0] == 0xEF && (unsigned char)p[1] == 0xBB && (unsigned char)p[2] == 0xBF) {
+        p += 3;
+        len -= 3;
+    }
+    int wl = len ? MultiByteToWideChar(CP_UTF8, 0, p, (int)len, nullptr, 0) : 0;
     std::wstring w(wl, 0);
-    if (wl) MultiByteToWideChar(CP_UTF8, 0, raw.data(), (int)raw.size(), w.data(), wl);
+    if (wl) MultiByteToWideChar(CP_UTF8, 0, p, (int)len, w.data(), wl);
     return w;
 }
 bool WriteTextUtf8(const std::wstring& path, const std::wstring& data, bool atomic) {
     if (atomic) CreateDirectoryW(ConfigDir().c_str(), nullptr);
-    int l = WideCharToMultiByte(CP_UTF8, 0, data.c_str(), (int)data.size(), nullptr, 0, nullptr, nullptr);
-    std::string raw(l, 0);
+    int l = data.empty() ? 0 : WideCharToMultiByte(CP_UTF8, 0, data.c_str(), (int)data.size(), nullptr, 0, nullptr, nullptr);
+    std::vector<char> raw((size_t)l);
     if (l) WideCharToMultiByte(CP_UTF8, 0, data.c_str(), (int)data.size(), raw.data(), l, nullptr, nullptr);
     std::wstring target = atomic ? (path + L".tmp") : path;
     HANDLE h = CreateFileW(target.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
@@ -350,8 +449,6 @@ void LoadConfig() {
     g_cfg.silent          = getB(L"silent", false);
     g_cfg.allSessions     = getB(L"allsessions", false);
     // 抖动保护是内置安全护栏（高缺页时跳过待机清理），不暴露开关，也不落盘。
-    // v2.0 起手动「均衡」默认包含全量待机与文件缓存，仅「深度」开启物理页合并。
-    if (g_cfg.sysCache && !g_cfg.combinePages) g_cfg.purgeFullManual = true;
     g_zh.store(g_cfg.lang != L"en", std::memory_order_relaxed);
     PublishConfig(g_cfg);
 }
@@ -403,8 +500,9 @@ void Log(const wchar_t* fmt, ...) {
     swprintf(line, 1300, L"[%04d-%02d-%02d %02d:%02d:%02d] %s\r\n",
              t.wYear, t.wMonth, t.wDay, t.wHour, t.wMinute, t.wSecond, buf);
     int l = WideCharToMultiByte(CP_UTF8, 0, line, -1, nullptr, 0, nullptr, nullptr);
-    std::string raw(l > 0 ? l - 1 : 0, 0);
-    if (l > 0) WideCharToMultiByte(CP_UTF8, 0, line, -1, raw.data(), l, nullptr, nullptr);
+    if (l <= 1) return;
+    std::vector<char> raw((size_t)l);
+    WideCharToMultiByte(CP_UTF8, 0, line, -1, raw.data(), l, nullptr, nullptr);
     // 多线程（清理/合并/系统查询）会同时写日志：串行化避免行交错，
     // 共享读写删让轮转和外部查看日志都不会把写入挡掉。
     EnterCriticalSection(&g_logLock);
@@ -418,7 +516,7 @@ void Log(const wchar_t* fmt, ...) {
                            OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
     if (h != INVALID_HANDLE_VALUE) {
         DWORD wr = 0;
-        WriteFile(h, raw.data(), (DWORD)raw.size(), &wr, nullptr);
+        WriteFile(h, raw.data(), (DWORD)(l - 1), &wr, nullptr);
         CloseHandle(h);
     }
     LeaveCriticalSection(&g_logLock);
@@ -490,6 +588,7 @@ void InitCore() {
     g_selfPid = GetCurrentProcessId();
     DWORD sid = 0;
     if (ProcessIdToSessionId(g_selfPid, &sid)) g_selfSession = sid;
+    InitCpuTopologyOnce();
     SetUnhandledExceptionFilter(CrashFilter);
     LoadConfig();
     RebuildWhitelist();
@@ -514,20 +613,53 @@ bool QueryMemoryLists(Metrics& m) {
     ULONG ret = 0;
     NTSTATUS st = NtQuerySystemInformation(SIC_SystemMemoryListInformation, &ml, sizeof(ml), &ret);
     if (st != 0) {
-        m.freeBytes = m.standbyBytes = 0;
+        m.freeBytes = m.standbyBytes = m.standbyP0Bytes = 0;
         return false;
     }
-    unsigned long long page = 4096;
-    SYSTEM_INFO si{};
-    GetSystemInfo(&si);
-    if (si.dwPageSize) page = si.dwPageSize;
+    const unsigned long long page = g_pageSize ? g_pageSize : 4096ULL;
     m.freeBytes = (unsigned long long)(ml.ZeroPageCount + ml.FreePageCount) * page;
+    m.standbyP0Bytes = (unsigned long long)ml.PageCountByPriority[0] * page;
     unsigned long long sum = 0;
-    for (int i = 0; i < 8; i++) {
-        m.standbyByPrio[i] = (unsigned long long)ml.PageCountByPriority[i] * page;
-        sum += m.standbyByPrio[i];
-    }
+    for (int i = 0; i < 8; i++)
+        sum += (unsigned long long)ml.PageCountByPriority[i] * page;
     m.standbyBytes = sum;
+    return true;
+}
+
+bool QueryPageFileStats(PageFileStat& out) {
+    out = PageFileStat{};
+    struct SI_PAGEFILE {
+        ULONG NextEntryOffset;
+        ULONG TotalSize;
+        ULONG TotalInUse;
+        ULONG PeakUsage;
+        SI_UNICODE_STRING PageFileName;
+    };
+    std::vector<unsigned char> buf(4096);
+    ULONG ret = 0;
+    NTSTATUS st = NtQuerySystemInformation(SIC_SystemPagefileInformation, buf.data(), (ULONG)buf.size(), &ret);
+    if (st == (NTSTATUS)STATUS_INFO_LENGTH_MISMATCH && ret > buf.size() && ret <= (256 << 10)) {
+        buf.resize(ret + 256);
+        st = NtQuerySystemInformation(SIC_SystemPagefileInformation, buf.data(), (ULONG)buf.size(), &ret);
+    }
+    if (st != 0 || ret < sizeof(SI_PAGEFILE)) return false;
+    const unsigned long long page = g_pageSize ? g_pageSize : 4096ULL;
+    const unsigned long long pagesPerMB = (MB / page) ? (MB / page) : 256ULL;
+    size_t off = 0;
+    for (int guard = 0; guard < 16 && off + sizeof(SI_PAGEFILE) <= ret; guard++) {
+        auto* pf = (const SI_PAGEFILE*)(buf.data() + off);
+        out.allocMB += (unsigned long long)pf->TotalSize / pagesPerMB;
+        out.useMB   += (unsigned long long)pf->TotalInUse / pagesPerMB;
+        out.peakMB  += (unsigned long long)pf->PeakUsage / pagesPerMB;
+        if (out.firstPath.empty() && pf->PageFileName.Length && pf->PageFileName.Buffer &&
+            pf->PageFileName.Length < 520) {
+            std::wstring raw(pf->PageFileName.Buffer, pf->PageFileName.Length / sizeof(wchar_t));
+            if (raw.rfind(L"\\??\\", 0) == 0) raw = raw.substr(4);
+            out.firstPath = std::move(raw);
+        }
+        if (pf->NextEntryOffset == 0) break;
+        off += pf->NextEntryOffset;
+    }
     return true;
 }
 
@@ -559,11 +691,10 @@ bool QueryPools(Metrics& m) {
     return true;
 }
 
-bool TakeSnapshot(Snapshot& s) {
+static bool FillMetricsOnly(Metrics& m) {
     MEMORYSTATUSEX msx{};
     msx.dwLength = sizeof(msx);
     if (!GlobalMemoryStatusEx(&msx)) return false;
-    Metrics& m = s.m;
     m.loadPct = (int)msx.dwMemoryLoad;
     m.totalPhys = msx.ullTotalPhys;
     m.availPhys = msx.ullAvailPhys;
@@ -575,20 +706,26 @@ bool TakeSnapshot(Snapshot& s) {
     if (m.commitLimit)
         m.commitPct = 100.0 * (double)m.commitUsed / (double)m.commitLimit;
     m.hardFaultsPerSec = g_hfPerSec.load(std::memory_order_relaxed);
+    return true;
+}
+
+bool TakeSnapshot(Snapshot& s) {
+    if (!FillMetricsOnly(s.m)) return false;
 
     // 监控线程、清理线程和离线快照可能并发调用；每线程独立缓冲区，避免共享
-    // vector 的 resize/内核写入竞争。
+    // vector 的 resize/内核写入竞争。超过 1.5 MB 时用完即释放，防止双线程永久滞留 2–5 MB 私有内存。
     thread_local std::vector<unsigned char> buf;
     ULONG len = 1 << 20;
     NTSTATUS st = 0;
     for (int i = 0; i < 9; i++) {
-        buf.resize(len);
+        if (buf.size() < len) buf.resize(len);
         ULONG ret = 0;
         st = NtQuerySystemInformation(SIC_SystemProcessInformation, buf.data(), len, &ret);
         if (st == (NTSTATUS)STATUS_INFO_LENGTH_MISMATCH) { len = (ULONG)(len * 1.5) + (1 << 20); continue; }
         break;
     }
     if (st != 0) {
+        if (buf.capacity() > (1536 << 10)) std::vector<unsigned char>().swap(buf);
         Log(L"TakeSnapshot 失败: 0x%08X", (unsigned)st);
         return false;
     }
@@ -604,6 +741,7 @@ bool TakeSnapshot(Snapshot& s) {
         pi.ws = (unsigned long long)p->WorkingSetSize;
         pi.wsPrivate = (unsigned long long)p->WorkingSetPrivateSize;
         if (!pi.wsPrivate) pi.wsPrivate = pi.ws;   // 极少数系统进程该字段为 0
+        pi.commitPriv = (unsigned long long)p->PagefileUsage;
         pi.createTime = (unsigned long long)p->CreateTime.QuadPart;
         pi.cpu100ns = (unsigned long long)p->UserTime.QuadPart + (unsigned long long)p->KernelTime.QuadPart;
         hfSum += p->HardFaultCount;
@@ -613,9 +751,9 @@ bool TakeSnapshot(Snapshot& s) {
         if (p->NextEntryOffset == 0) break;
         p = (SI_PROC*)((unsigned char*)p + p->NextEntryOffset);
     }
+    if (buf.capacity() > (1536 << 10)) std::vector<unsigned char>().swap(buf);
     // 硬缺页累计值（速率由 MonitorTick 差分计算）
     s.m.hardFaultsCumulative = hfSum;
-    s.m.hardFaultsPerSec = g_hfPerSec.load(std::memory_order_relaxed);
     std::sort(s.procs.begin(), s.procs.end(),
               [](const ProcInfo& a, const ProcInfo& b) { return a.ws > b.ws; });
     return true;
@@ -744,9 +882,19 @@ static void CollectAudioPids(std::vector<DWORD>& out) {
     if (SUCCEEDED(CoCreateInstance(__uuidof(MMDeviceEnumerator), nullptr, CLSCTX_ALL,
                                    __uuidof(IMMDeviceEnumerator), (void**)&en)) && en) {
         const ERole roles[2] = { eConsole, eCommunications };
+        std::wstring firstId;
         for (ERole role : roles) {
             IMMDevice* dev = nullptr;
             if (FAILED(en->GetDefaultAudioEndpoint(eRender, role, &dev)) || !dev) continue;
+            // 大多数机器默认播放与通信设备相同，按设备 ID 去重省掉一半 AudioSrv RPC 往返
+            LPWSTR devId = nullptr;
+            bool dup = false;
+            if (SUCCEEDED(dev->GetId(&devId)) && devId) {
+                if (firstId.empty()) firstId = devId;
+                else if (firstId == devId) dup = true;
+                CoTaskMemFree(devId);
+            }
+            if (dup) { dev->Release(); continue; }
             IAudioSessionManager2* mgr = nullptr;
             if (SUCCEEDED(dev->Activate(__uuidof(IAudioSessionManager2), CLSCTX_ALL,
                                         nullptr, (void**)&mgr)) && mgr) {
@@ -882,7 +1030,7 @@ unsigned long long ComputeReclaimable(const Snapshot& s, const Config& c, size_t
     }
     if (candidatesOut) *candidatesOut = candidates;
     unsigned long long standby = (c.purgeFullManual || c.sysCache)
-                               ? s.m.standbyBytes : s.m.standbyByPrio[0];
+                               ? s.m.standbyBytes : s.m.standbyP0Bytes;
     return standby + trimPriv;
 }
 
@@ -919,13 +1067,16 @@ CleanPlan PlanAuto(const Config& c, const Metrics& m, bool hasCandidates,
     CleanPlan p;
     p.isAuto = true;
     const bool severe = IsSeverePressure(m);
-    const bool starved = m.availPhys < 512ULL * MB || m.freeBytes < 128ULL * MB;
+    const bool realOom = m.availPhys < 512ULL * MB;
+    const bool starved = realOom || m.freeBytes < 128ULL * MB;
     const bool lowFree = m.freeBytes < (unsigned long long)c.freeFloorMB * MB;
     const bool enoughStandby = m.standbyBytes >= (unsigned long long)c.standbyFloorMB * MB;
     const double hf = g_hfPerSec.load(std::memory_order_relaxed);
 
-    // 有候选时仍可顺手清低优先级缓存；旧策略“二选一”会让空闲页长期停在 0。
-    if (c.trimWS && (hasCandidates || severe)) {
+    // 换页风暴熔断（v2.1）：硬缺页 ≥ 1500/s 且非真实 OOM（可用 ≥ 512MB）时，
+    // 跳过自动工作集修剪，避免撞上目标进程地址空间锁阻塞 9–21 秒且收益趋零。
+    const bool trimHfOk = hf < 1500.0 || realOom;
+    if (c.trimWS && trimHfOk && (hasCandidates || severe)) {
         p.trimWS = true;
         p.minWSMB = c.minWSAutoMB;
         p.requireIdle = !severe;
@@ -937,7 +1088,7 @@ CleanPlan PlanAuto(const Config& c, const Metrics& m, bool hasCandidates,
             // 当空闲页 < 64 MB、P0 < 32 MB 且总待机 ≥ 2 GB 时，若高负载且无严重换页抖动，
             // 允许每 10 分钟最多升级一次全量待机清理，避免空闲页长期枯竭与每轮 +0 MB 空跑。
             const bool freeStarved = m.freeBytes < 64ULL * MB &&
-                                     m.standbyByPrio[0] < 32ULL * MB &&
+                                     m.standbyP0Bytes < 32ULL * MB &&
                                      m.standbyBytes >= 2048ULL * MB &&
                                      m.loadPct >= c.threshold + 5;
             const bool fullCoolOk = !lastFullPurgeMs ||
@@ -945,11 +1096,11 @@ CleanPlan PlanAuto(const Config& c, const Metrics& m, bool hasCandidates,
             const bool hfCalm = hf < 1500.0;
             // 仅真实枯竭（可用 < 512MB）绕过全量冷却；95% 负载但仍有 ≥512MB 可用缓存时
             // 遵守 10 分钟冷却，避免连续每分钟全量清缓存引发 4–9s 抖动。
-            const bool oomStarved = m.availPhys < 512ULL * MB && starved;
+            const bool oomStarved = realOom && starved;
             const bool highLoadStarved = severe && starved && fullCoolOk;
             p.purgeFull = oomStarved || highLoadStarved || (freeStarved && fullCoolOk && hfCalm);
             // 仅当 P0 确实有 ≥32 MB 待机缓存时才调用低优清理，消除 0 候选 + P0≈0 的空跑。
-            p.purgeLow = !p.purgeFull && (m.standbyByPrio[0] >= 32ULL * MB);
+            p.purgeLow = !p.purgeFull && (m.standbyP0Bytes >= 32ULL * MB);
         }
     }
     p.eco = c.ecoQoS;
@@ -1052,7 +1203,10 @@ static bool RestoreProcessTaming(DWORD pid, unsigned long long ct, bool wasEco, 
             if (wasCpu && GetPriorityClass(h) == BELOW_NORMAL_PRIORITY_CLASS) {
                 if (SetPriorityClass(h, NORMAL_PRIORITY_CLASS)) cpuRestored = true;
             }
-            if (wasEco || wasCpu) SetIoPriority(h, false);
+            if (wasEco || wasCpu) {
+                SetIoPriority(h, false);
+                SetBgCpuSets(h, false);
+            }
         }
     }
     CloseHandle(h);
@@ -1085,9 +1239,10 @@ static void NoteTrim(const ProcInfo& p) {
 void RunClean(const CleanPlan& plan, const Config& c, CleanResult& r, HANDLE cancel,
               const Snapshot* initialSnap) {
     EnablePrivileges();
-    SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_LOWEST);
-    InterlockedExchange(&g_cleanPhase, 1);
-    if (g_hwnd) PostMessageW(g_hwnd, WM_APP_CLEANING, 1, 0);
+    // 清理线程用 BELOW_NORMAL 而非 LOWEST，避免高负载换页时被后台编译任务饿死 10–20 秒
+    SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_BELOW_NORMAL);
+    if (InterlockedExchange(&g_cleanPhase, 1) != 1 && g_hwnd)
+        PostMessageW(g_hwnd, WM_APP_CLEANING, 1, 0);
     if (cancel && WaitForSingleObject(cancel, 0) == WAIT_OBJECT_0) {
         r.aborted = true;
         InterlockedExchange(&g_cleanPhase, 0);
@@ -1111,17 +1266,14 @@ void RunClean(const CleanPlan& plan, const Config& c, CleanResult& r, HANDLE can
     const Snapshot& before = initialSnap ? *initialSnap : ownBefore;
     r.availBefore = before.m.availPhys;
     r.freeBefore = before.m.freeBytes;
-    r.standbyBefore = before.m.standbyBytes;
 
     ULONGLONG t0 = GetTickCount64();
     auto prot = BuildProtectedPids(before, true);
 
     // 1) 待机 / 文件缓存（先做，避免刚修剪出的页被立刻丢弃）
-    if (!r.aborted) {
-        if (plan.purgeLow)  r.standbyLow = PurgeStandby(true);
-        if (plan.purgeFull) r.standbyFull = PurgeStandby(false);
-        if (plan.sysCache)  r.cache = TrimSystemFileCache();
-    }
+    if (plan.purgeLow)  r.standbyLow = PurgeStandby(true);
+    if (plan.purgeFull) r.standbyFull = PurgeStandby(false);
+    if (plan.sysCache)  r.cache = TrimSystemFileCache();
 
     // 2) 修剪工作集与/或后台效率标记（合并单循环）
     const bool compHigh = IsHighCompPressure(before.m);
@@ -1155,6 +1307,7 @@ void RunClean(const CleanPlan& plan, const Config& c, CleanResult& r, HANDLE can
             }
             if (ok && plan.eco && SetMemPriorityLow(h) && SetEcoQoS(h, true)) {
                 SetIoPriority(h, true);
+                SetBgCpuSets(h, true);
                 EnterCriticalSection(&g_lock);
                 UpsertPid(p.pid, p.createTime).ecoMarked = true;
                 LeaveCriticalSection(&g_lock);
@@ -1192,7 +1345,6 @@ void RunClean(const CleanPlan& plan, const Config& c, CleanResult& r, HANDLE can
     }
     r.availAfter = after.m.availPhys;
     r.freeAfter = after.m.freeBytes;
-    r.standbyAfter = after.m.standbyBytes;
     r.availGain = Grow(r.availAfter, r.availBefore);
     r.freeGain = Grow(r.freeAfter, r.freeBefore);
     r.durationMs = GetTickCount64() - t0;
@@ -1257,10 +1409,12 @@ std::vector<AppMemAgg> AggregateApps(const Snapshot& s) {
                 a.display.resize(a.display.size() - 4);
             a.count = 1;
             a.priv = priv;
+            a.commitPriv = p.commitPriv;
             out.push_back(std::move(a));
         } else {
             found->count++;
             found->priv += priv;
+            found->commitPriv += p.commitPriv;
         }
     }
     for (size_t i = 1; i < out.size(); i++) {
@@ -1303,7 +1457,8 @@ static DWORD WINAPI CleanThreadProc(LPVOID param) {
 
     const ULONGLONG doneMs = GetTickCount64();
     const unsigned long long shown = r.freeGain > r.availGain ? r.freeGain : r.availGain;
-    // 手动清理完成后同样刷新自动冷却，防止刚手动清完 1 秒就被自动清理追打（v2.0.5）
+    // 手动清理完成后同样刷新自动冷却，防止刚手动清完 1 秒就被自动清理追打（v2.0.5）；
+    // 异常中止且无净增益时不覆盖“上次清理”，避免把已有结果抹成 0。
     if (!r.aborted || r.freeGain > 0 || r.availGain > 0) {
         g_lastAutoCleanMs.store(doneMs);
         if (r.standbyFull) g_lastAutoFullPurgeMs.store(doneMs);
@@ -1317,9 +1472,6 @@ static DWORD WINAPI CleanThreadProc(LPVOID param) {
         } else {
             g_lowGainStreak.store(0, std::memory_order_relaxed);
         }
-    }
-    // 异常中止且无净增益时不覆盖“上次清理”，避免把已有结果抹成 0
-    if (!r.aborted || r.freeGain > 0 || r.availGain > 0) {
         g_lastCleanWasAuto.store(isAuto, std::memory_order_relaxed);
         g_lastFreeGain = r.freeGain;
         g_lastAvailGain = r.availGain;
@@ -1332,8 +1484,10 @@ static DWORD WINAPI CleanThreadProc(LPVOID param) {
     // 通知口径对齐同赛道产品（WinMemoryCleaner: "freed ~X"）：
     // “已释放约 X”取空闲/可用净增的较大者，单指标、不堆术语。
     // 自动模式只报有实际收益的那几次：空跑报“释放 0MB”只是噪音。
+    const ULONGLONG lastNotify = g_lastAutoNotifyMs.load();
+    const ULONGLONG sinceNotify = lastNotify ? (GetTickCount64() - lastNotify) : kAutoNotifyGapMs;
     bool autoQuiet = isAuto && !ShouldNotifyAutoClean(
-        shown, GetTickCount64() - g_lastAutoNotifyMs.load(),
+        shown, sinceNotify,
         g_hwnd && IsWindowVisible(g_hwnd) != FALSE, cfg.silent);
     if (g_hwnd && !cfg.silent && !autoQuiet) {
         wchar_t info[320];
@@ -1642,13 +1796,16 @@ static void UpdateProcessTracking(const Snapshot& s, const Config& cfg, ULONGLON
         if (GetPriorityClass(h) == NORMAL_PRIORITY_CLASS &&
             SetPriorityClass(h, BELOW_NORMAL_PRIORITY_CLASS)) {
             SetIoPriority(h, true);
+            const bool cpuSetOk = SetBgCpuSets(h, true);
             EnterCriticalSection(&g_lock);
             if (auto* tr = FindPid(item.pid); tr && tr->createTime == item.ct) {
                 tr->cpuRestrained = true;
                 tr->restrainedAtMs = now;
             }
             LeaveCriticalSection(&g_lock);
-            Log(L"后台让路：%s (PID %u) → 低于正常 CPU + 低 I/O 优先级", item.name.c_str(), item.pid);
+            Log(cpuSetOk ? L"后台让路：%s (PID %u) → 低于正常 CPU + 低 I/O + 能效核分流"
+                         : L"后台让路：%s (PID %u) → 低于正常 CPU + 低 I/O 优先级",
+                item.name.c_str(), item.pid);
         }
         CloseHandle(h);
     }
@@ -1656,15 +1813,15 @@ static void UpdateProcessTracking(const Snapshot& s, const Config& cfg, ULONGLON
         RestoreProcessTaming(item.pid, item.ct, item.eco, item.cpu);
 }
 
-void MonitorTick() {
+static void MonitorTick() {
+#ifdef MS_DEV
     ULONGLONG tickT0 = GetTickCount64();
     static ULONGLONG tickPrev = 0;
     static bool tickLog = [] { wchar_t e[8] = {}; return GetEnvironmentVariableW(L"MEMSweep_TICKLOG", e, 8) != 0; }();
-    Snapshot s;
-    if (!TakeSnapshot(s)) return;
+#endif
+    static unsigned s_lightSkip = 0;
     Config cfg = GetConfigSnapshot();
-    PruneFocusHistory(cfg);
-
+    const bool uiVisible = g_hwnd && IsWindowVisible(g_hwnd) && !IsIconic(g_hwnd);
     bool game = IsFullscreenOrPresenting();
     if (g_gameMode.exchange(game) != game) {
         Log(game ? L"检测到全屏/演示模式，自动清理暂停"
@@ -1673,6 +1830,30 @@ void MonitorTick() {
 
     // 焦点兜底（必须在进程跟踪之前，确保新切前台立即免疫并解除让路）
     if (DWORD pid = ForegroundPid()) NoteFocus(pid);
+
+    // 托盘隐藏快速路径（v2.1）：窗口不可见、未开效率模式/离开维护时，
+    // 先做微秒级内存指标采样；仅当内存压力接近阈值或每 3 轮（15s）才做全量进程枚举，
+    // 省去 65%+ 后台内核采样开销，同时仍保持精确的空闲追踪与托盘百分比刷新。
+    if (!uiVisible && !cfg.ecoQoS && !cfg.idleDeep && g_prevTickMs != 0) {
+        Metrics lm{};
+        if (FillMetricsOnly(lm)) {
+            const bool nearPressure = lm.loadPct >= cfg.threshold - 5 || lm.availPhys < 768ULL * MB;
+            if (!nearPressure && (++s_lightSkip % 3) != 0) {
+                PruneFocusHistory(cfg);
+                EnterCriticalSection(&g_lock);
+                g_metrics = lm;
+                g_snap.m = lm;
+                LeaveCriticalSection(&g_lock);
+                if (g_hwnd) PostMessageW(g_hwnd, WM_APP_STATS, 0, 0);
+                return;
+            }
+        }
+    }
+    s_lightSkip = 0;
+
+    Snapshot s;
+    if (!TakeSnapshot(s)) return;
+    PruneFocusHistory(cfg);
 
     ULONGLONG now = GetTickCount64();
     // 高压时放宽空闲阈值：负载 ≥ 阈值+5 或 空闲 < 512MB → 最长 60s
@@ -1705,19 +1886,19 @@ void MonitorTick() {
                 cfg.idleDeepSecs, s.m.loadPct, s.m.commitPct);
     }
 
-    // 可回收估算（每 tick 一次，纯内存计算）：空闲候选私有WS
-    // + 低优先级缓存（温和模式）或全量缓存（均衡/深度模式）。
-    // 仅面板可见时计算——它只是 UI 显示指标，托盘/后台不需要，
-    // 且省去每 5s 对 500 进程的保护判定与字符串分配。
+    // 可回收估算仅在面板可见时计算；后台隐藏态只在真正满足自动清理触发条件时才统计候选数，
+    // 避免 99% 未触发的 tick 里每 5 秒白扫 450+ 进程与上千次加锁。
     size_t candidates = 0;
-    if (g_hwnd && IsWindowVisible(g_hwnd) && !IsIconic(g_hwnd))
+    bool haveCandidates = false;
+    if (uiVisible) {
         g_reclaimableBytes.store(ComputeReclaimable(s, cfg, &candidates));
-    else
-        candidates = CountTrimCandidates(s, true, cfg.minWSAutoMB, cfg);
+        haveCandidates = true;
+    }
 
     if (!g_cleaning && !game && !AutoPaused() &&
         ShouldTriggerAuto(cfg, s.m, now, g_lastAutoCleanMs.load(std::memory_order_relaxed),
                           g_lowGainStreak.load(std::memory_order_relaxed))) {
+        if (!haveCandidates) candidates = CountTrimCandidates(s, true, cfg.minWSAutoMB, cfg);
         CleanPlan plan = PlanAuto(cfg, s.m, candidates > 0, now, g_lastAutoFullPurgeMs.load());
         if (plan.trimWS || plan.purgeLow || plan.purgeFull) {
             Log(L"自动清理触发：使用中 %d%%（阈值 %d%%），可用 %s，空闲 %s，缓存 %s，"
@@ -1735,16 +1916,18 @@ void MonitorTick() {
     g_snap = std::move(s);
     g_metrics = g_snap.m;
     LeaveCriticalSection(&g_lock);
+#ifdef MS_DEV
     if (tickLog)
         Log(L"[ticklog] interval=%llums cost=%llums",
             tickPrev ? tickT0 - tickPrev : 0, GetTickCount64() - tickT0);
     tickPrev = tickT0;
+#endif
     if (g_hwnd) PostMessageW(g_hwnd, WM_APP_STATS, 0, 0);
 }
 
 DWORD WINAPI MonitorThreadProc(LPVOID) {
-    HRESULT co = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
-    // 首次采样只在这个线程里做，避免 UI 启动与 LowMemory 事件并发进入 MonitorTick
+    // 首次采样只在这个线程里做，避免 UI 启动与 LowMemory 事件并发进入 MonitorTick；
+    // COM 仅在 CollectAudioPids 按需初始化，冷启动托盘不常驻 combase/rpcrt4。
     if (!g_quit) MonitorTick();
     while (!g_quit) {
         HANDLE hs[2] = {};
@@ -1761,7 +1944,6 @@ DWORD WINAPI MonitorThreadProc(LPVOID) {
         // 加 2 秒节流，避免事件循环空转。
         if (lowIndex >= 0 && w == WAIT_OBJECT_0 + (DWORD)lowIndex) Sleep(2000);
     }
-    if (SUCCEEDED(co)) CoUninitialize();
     return 0;
 }
 
@@ -1905,15 +2087,16 @@ bool IsProtectedName(const std::wstring& name) {
     return wl;
 }
 
+#ifdef MS_DEV
 void DumpIdleDiagnostics() {
     Snapshot s;
     TakeSnapshot(s);
     Config cfg = GetConfigSnapshot();
     auto prot = BuildProtectedPids(s);
     ULONGLONG now = GetTickCount64();
-    Log(L"[idlecheck] load=%d free=%s standby=%s commit=%.0f%% procs=%d idleSecs=%d minWS=%dMB",
+    Log(L"[idlecheck] load=%d free=%s standby=%s commit=%.0f%% procs=%d idleSecs=%d minWS=%dMB bgCpuSets=%d",
         s.m.loadPct, FormatBytes(s.m.freeBytes).c_str(), FormatBytes(s.m.standbyBytes).c_str(),
-        s.m.commitPct, (int)s.procs.size(), cfg.idleSecs, cfg.minWSAutoMB);
+        s.m.commitPct, (int)s.procs.size(), cfg.idleSecs, cfg.minWSAutoMB, (int)g_bgCpuSetIds.size());
     int shown = 0;
     for (auto& p : s.procs) {
         if (p.ws < 64ULL * MB) break;
@@ -1929,15 +2112,15 @@ void DumpIdleDiagnostics() {
                 blocked = true;
         }
         LeaveCriticalSection(&g_lock);
-        Log(L"[idlecheck] %-26s pid=%6u ws=%8s private=%8s idle=%5llus protected=%d trimBlocked=%d",
+        Log(L"[idlecheck] %-26s pid=%6u ws=%8s private=%8s commit=%8s idle=%5llus protected=%d trimBlocked=%d",
             p.name.c_str(), p.pid, FormatBytes(p.ws).c_str(), FormatBytes(p.wsPrivate).c_str(),
-            (unsigned long long)(idleMs / 1000), (int)pd, (int)blocked);
+            FormatBytes(p.commitPriv).c_str(), (unsigned long long)(idleMs / 1000), (int)pd, (int)blocked);
         if (++shown >= 30) break;
     }
 }
 
 // ---------------------------------------------------------------------------
-// 自检（纯逻辑）
+// 自检（纯逻辑，仅 dev 构建编入，Release 零开销）
 // ---------------------------------------------------------------------------
 bool SelfTest() {
     bool ok = true;
@@ -1951,7 +2134,7 @@ bool SelfTest() {
     // 触发语义：free 低不等于压力，只有可用枯竭才算紧急；连续低收益按指数退避，真实 OOM 不退避
     m.totalPhys = 24ULL * GB; m.availPhys = 4ULL * GB;
     m.loadPct = 84; m.freeBytes = 2ULL * GB; m.standbyBytes = 2ULL * GB;
-    m.standbyByPrio[0] = 64ULL * MB;
+    m.standbyP0Bytes = 64ULL * MB;
     chk(!ShouldTriggerAuto(c, m, 1000000, 0), L"load 84% should not trigger");
     m.loadPct = 85;
     chk(ShouldTriggerAuto(c, m, 1000000, 0), L"load 85% should trigger");
@@ -1971,7 +2154,7 @@ bool SelfTest() {
 
     // 自动计划：有候选且 P0>=32MB 时顺手清低优先级缓存；P0<32MB 时跳过无意义低优清理
     m.loadPct = 90; m.availPhys = 4ULL * GB;
-    m.freeBytes = 800ULL * MB; m.standbyBytes = 2ULL * GB; m.standbyByPrio[0] = 64ULL * MB;
+    m.freeBytes = 800ULL * MB; m.standbyBytes = 2ULL * GB; m.standbyP0Bytes = 64ULL * MB;
     CleanPlan p1 = PlanAuto(c, m, true);
     chk(p1.trimWS && p1.purgeLow && !p1.purgeFull, L"auto with candidates trims + low purge");
     chk(p1.requireIdle && p1.minWSMB == c.minWSAutoMB, L"auto trim params");
@@ -1979,10 +2162,10 @@ bool SelfTest() {
     CleanPlan p2 = PlanAuto(c, m, false);
     chk(!p2.trimWS && p2.purgeLow && !p2.purgeFull, L"auto without candidates purges low when P0>=32MB");
     // 无候选 + P0=0 → 不空跑低优清理
-    m.standbyByPrio[0] = 0;
+    m.standbyP0Bytes = 0;
     CleanPlan p2z = PlanAuto(c, m, false);
     chk(!p2z.trimWS && !p2z.purgeLow && !p2z.purgeFull, L"auto skips empty P0 purge");
-    m.standbyByPrio[0] = 64ULL * MB;
+    m.standbyP0Bytes = 64ULL * MB;
     // 缓存不足 → 不清理
     m.standbyBytes = 100ULL * MB;
     CleanPlan p3 = PlanAuto(c, m, false);
@@ -2003,7 +2186,7 @@ bool SelfTest() {
     {
         Metrics mh{};
         mh.totalPhys = 24ULL * GB; mh.availPhys = 1024ULL * MB; mh.loadPct = 95;
-        mh.freeBytes = 10ULL * MB; mh.standbyBytes = 1024ULL * MB; mh.standbyByPrio[0] = 0;
+        mh.freeBytes = 10ULL * MB; mh.standbyBytes = 1024ULL * MB; mh.standbyP0Bytes = 0;
         CleanPlan pm1 = PlanAuto(c, mh, false, 1000000ULL, 0);
         chk(pm1.purgeFull, L"95% load starved escalates when full cooldown ready");
         CleanPlan pm2 = PlanAuto(c, mh, false, 1000000ULL, 1000000ULL - 60000ULL);
@@ -2011,7 +2194,7 @@ bool SelfTest() {
     }
     // 高负载但仍有可用页：只做紧急修剪 + 低优先级缓存（P0>=32MB），不重复全量清空
     m.availPhys = 2ULL * GB; m.loadPct = 96;
-    m.freeBytes = 2ULL * GB; m.standbyBytes = 2ULL * GB; m.standbyByPrio[0] = 64ULL * MB;
+    m.freeBytes = 2ULL * GB; m.standbyBytes = 2ULL * GB; m.standbyP0Bytes = 64ULL * MB;
     CleanPlan ph = PlanAuto(c, m, false);
     chk(ph.trimWS && !ph.requireIdle && !ph.purgeFull && ph.purgeLow,
         L"high load keeps high-priority cache");
@@ -2021,14 +2204,20 @@ bool SelfTest() {
         Metrics ms{};
         ms.totalPhys = 24ULL * GB; ms.availPhys = 3ULL * GB; ms.loadPct = 90;
         ms.freeBytes = 10ULL * MB; ms.standbyBytes = 3ULL * GB;
-        ms.standbyByPrio[0] = 0; ms.standbyByPrio[5] = 3ULL * GB;
+        ms.standbyP0Bytes = 0;
         CleanPlan pf = PlanAuto(c, ms, false, 1000000ULL, 0);
         chk(pf.purgeFull && !pf.purgeLow, L"freeStarved escalates P5 standby purge");
         CleanPlan pc = PlanAuto(c, ms, false, 1000000ULL, 1000000ULL - 120000ULL);
         chk(!pc.purgeFull && !pc.purgeLow, L"freeStarved respects 10m cooldown and skips P0=0");
         g_hfPerSec.store(1600.0);
         CleanPlan phf = PlanAuto(c, ms, false, 1000000ULL, 0);
-        chk(!phf.purgeFull && !phf.purgeLow, L"freeStarved skips full purge when hf>=1500 and P0=0");
+        chk(!phf.purgeFull && !phf.purgeLow && !phf.trimWS, L"hf>=1500 blocks both full purge and auto trim");
+        // 有候选时高硬缺页同样熔断自动修剪，防止 9–21s 锁争用阻塞；但真实 OOM (<512MB) 放行
+        CleanPlan phft = PlanAuto(c, ms, true, 1000000ULL, 0);
+        chk(!phft.trimWS, L"hf>=1500 fuses auto trimWS with ample avail");
+        ms.availPhys = 200ULL * MB;
+        CleanPlan phfo = PlanAuto(c, ms, true, 1000000ULL, 0);
+        chk(phfo.trimWS && phfo.purgeFull, L"real OOM (<512MB) bypasses hf trim fuse");
         g_hfPerSec.store(0.0);
     }
 
@@ -2048,15 +2237,26 @@ bool SelfTest() {
         chk(pdeep.purgeFull && pdeep.sysCache && pdeep.combine, L"deep manual plan combines pages");
     }
 
-    // 可回收估算：区分仅 P0 低优缓存（温和）与全量缓存（均衡/深度）
+    // 可回收估算与 Commit 聚合：区分仅 P0 低优缓存（温和）与全量缓存（均衡/深度）
     {
         Snapshot sn;
         sn.m.totalPhys = 24ULL * GB; sn.m.availPhys = 4ULL * GB; sn.m.standbyBytes = 3ULL * GB;
-        sn.m.standbyByPrio[0] = 128ULL * MB;
+        sn.m.standbyP0Bytes = 128ULL * MB;
         Config cm = c;
         chk(ComputeReclaimable(sn, cm) == 3ULL * GB, L"ComputeReclaimable balanced includes full standby");
         cm.purgeFullManual = false; cm.sysCache = false;
         chk(ComputeReclaimable(sn, cm) == 128ULL * MB, L"ComputeReclaimable mild uses P0 standby");
+        ProcInfo a1{}; a1.pid = 100; a1.name = L"app.exe"; a1.ws = 200 * MB; a1.wsPrivate = 150 * MB; a1.commitPriv = 600 * MB;
+        ProcInfo a2{}; a2.pid = 101; a2.name = L"app.exe"; a2.ws = 100 * MB; a2.wsPrivate = 100 * MB; a2.commitPriv = 400 * MB;
+        sn.procs.push_back(a1); sn.procs.push_back(a2);
+        auto agg = AggregateApps(sn);
+        chk(agg.size() == 1 && agg[0].count == 2 && agg[0].priv == 250 * MB && agg[0].commitPriv == 1000 * MB,
+            L"AggregateApps sums private WS and commit");
+    }
+    {
+        PageFileStat pfs{};
+        QueryPageFileStats(pfs);   // 冒烟：原生 SystemPagefileInformation 不崩
+        chk(pfs.allocMB >= pfs.useMB || pfs.allocMB == 0, L"QueryPageFileStats sane");
     }
 
     // 离开时维护：空闲后台 + 低优先级缓存 + 页合并；不清全量缓存/文件缓存
@@ -2163,5 +2363,6 @@ bool SelfTest() {
     Log(L"[selftest] %s", ok ? L"PASS" : L"FAIL");
     return ok;
 }
+#endif // MS_DEV
 
 } // namespace ms

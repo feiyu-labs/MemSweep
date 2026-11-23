@@ -1,5 +1,21 @@
 # Changelog
 
+## v2.1.0 — 2026-11-23
+
+### 底层前沿能力、零 PowerShell 原生诊断与极限轻量化
+- **异构 CPU 拓扑后台分流（Intel 大小核 / AMD 双 CCD）**：通过 `GetSystemCpuSetInformation` 与 `GetLogicalProcessorInformationEx(RelationCache)` 零硬编码识别 Intel P/E 核及 AMD 非对称双 CCD；开启「后台效率模式」后，对闲置后台与高 CPU 让路进程叠加 `SetProcessDefaultCpuSets` 柔绑至能效核/次 CCD，切回前台、CPU 回落或关闭开关时 `NULL, 0` 无残留交回系统。
+- **零 PowerShell 原生系统状态与分页文件真修复**：系统状态页彻底移除每次打开拉起 80 MB `powershell.exe` 的旧链路，改用原生 `NtQuerySystemInformation(SystemPagefileInformation)` + `SysMain` 服务/内核压缩接口/`Superfetch\StartedComponents`（`0x200`/`0x100`）毫秒级秒开；同时支持微软商店版 WSL2（`WSLService`）与旧版（`LxssManager`）；分页文件调整改为原生写 `PagingFiles`（`REG_MULTI_SZ`），彻底修复系统托管分页文件点击无反应的现网缺陷。
+- **高硬缺页修剪熔断与监控/UI 深度减负**：
+  - 系统硬缺页 `≥ 1500/s` 且非真实 OOM（可用 `≥ 512 MB`）时，自动清理同步跳过工作集修剪，并将清理线程调为 `THREAD_PRIORITY_BELOW_NORMAL`、WASAPI 音频设备按 ID 去重，消除换页风暴期单进程阻塞 9–21 秒的长尾卡顿；
+  - 托盘隐藏且未开效率模式/离开维护、内存压力平稳时，监控线程在 2/3 轮次仅做微秒级内存指标采样，并将 `CountTrimCandidates` 收进 `ShouldTriggerAuto` 护栏内（省去隐藏态 99% 无意义的全表进程扫描）；
+  - 首页部分重绘（Timer 4 光晕）跳过标题栏、主按钮与底部卡片绘制。
+- **冷启动零 GDI+ 托盘与体积极限瘦身（403 KB → 381 KB x64 / 343 KB → 322 KB ARM64）**：
+  - 托盘数字徽章改为纯 Win32 GDI + SDF 抗锯齿圆角渐变渲染，`GdiplusStartup` 与 7 套字体延迟到首次开窗；`MonitorThreadProc` 去掉启动即常驻的 `CoInitializeEx`；`TakeSnapshot` 超过 1.5 MB 的临时缓冲用完即释放；
+  - 将 `SelfTest` / `/uipng` / `/checkpng` / `/idlecheck` 全部 `#ifdef MS_DEV` 隔离出 Release 包，全代码消除 `std::string` 与 `std::to_wstring` 实例化，删掉未使用的链接库与死代码。
+- **进程页 Commit 可见性与 13 处现网细节修复**：
+  - 进程页在应用已提交内存显著高于专用工作集（`≥ +512 MB`）时内联标出 `提交 X`，直击高提交卡死源头；
+  - 默认用户保护名单留空（消除与内置 VM 硬保护重叠导致的 2 条“未运行”假行）；主屏暂停状态支持直接点自动清理开关恢复；标题栏主题按钮支持 `Shift+点击` 恢复跟随系统主题；修复 `WM_CREATE` 双次失败绘制托盘、异步清理双发 `WM_APP_CLEANING`、开机前 10 分钟首次自动气泡被误杀、清空保护名单底字残留、敲字整窗重绘、主页 `Ctrl+S` 隐形写盘、`sysinfo.txt` 残留磁盘等缺陷。
+
 ## v2.0.5 — 2026-11-22
 
 ### 实机 50 小时使用数据复核与前沿机制打磨

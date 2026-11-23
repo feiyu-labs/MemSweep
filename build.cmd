@@ -48,7 +48,7 @@ echo [build] compiling resources...
 if errorlevel 1 goto :fail
 
 echo [build] compiling+linking...
-"%ZIG%" c++ -target %TARGET% -municode -DUNICODE -D_UNICODE -Oz -fno-exceptions -fno-rtti -fno-ident -ffunction-sections -fdata-sections -fvisibility=hidden -fvisibility-inlines-hidden -Wall -Wextra -Wshadow -Wformat=2 -Wundef -Wpointer-arith -Werror -I src src\main.cpp src\core.cpp src\ui.cpp "%RES%" %DEVFLAG% -o "%OUT%" -lntdll -lshell32 -lgdi32 -ladvapi32 -lcomctl32 -ldwmapi -lgdiplus -lole32 -loleaut32 -luuid -limm32 -Wl,--subsystem,windows -Wl,--gc-sections -s
+"%ZIG%" c++ -target %TARGET% -municode -DUNICODE -D_UNICODE -Oz -fno-exceptions -fno-rtti -fno-ident -ffunction-sections -fdata-sections -fvisibility=hidden -fvisibility-inlines-hidden -Wall -Wextra -Wshadow -Wformat=2 -Wundef -Wpointer-arith -Werror -I src src\main.cpp src\core.cpp src\ui.cpp "%RES%" %DEVFLAG% -o "%OUT%" -lntdll -lshell32 -lgdi32 -ladvapi32 -ldwmapi -lgdiplus -lole32 -limm32 -Wl,--subsystem,windows -Wl,--gc-sections -s
 if errorlevel 1 goto :fail
 
 echo [build] done: %OUT%

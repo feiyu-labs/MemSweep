@@ -58,10 +58,12 @@ static bool HasArg(const wchar_t* a) {
 int APIENTRY wWinMain(HINSTANCE hInst, HINSTANCE, PWSTR, int) {
     InitCore();
 
+#ifdef MS_DEV
     const bool selftest = HasArg(L"/selftest");
     const bool uipng    = HasArg(L"/uipng");
     const bool checkpng = HasArg(L"/checkpng");
     const bool idlecheck = HasArg(L"/idlecheck");
+#endif
     const bool pauseCmd  = HasArg(L"/pause");
     const bool resumeCmd = HasArg(L"/resume");
     const bool combineCmd = HasArg(L"/combine");
@@ -71,6 +73,7 @@ int APIENTRY wWinMain(HINSTANCE hInst, HINSTANCE, PWSTR, int) {
     const bool oneShot  = HasArg(L"/clean");
     const bool wantExit = HasArg(L"/exit");
 
+#ifdef MS_DEV
     if (selftest) {
         EnsureConsole();
         bool ok = SelfTest();
@@ -93,6 +96,7 @@ int APIENTRY wWinMain(HINSTANCE hInst, HINSTANCE, PWSTR, int) {
         ConPrint(L"System check snapshot -> %s (rc=%d)\n", out.c_str(), rc);
         return rc;
     }
+#endif
     if (combineCmd) {
         EnsureConsole();
         if (AlreadyRunning()) {
@@ -130,12 +134,14 @@ int APIENTRY wWinMain(HINSTANCE hInst, HINSTANCE, PWSTR, int) {
         }
         return 0;
     }
+#ifdef MS_DEV
     if (idlecheck) {
         EnsureConsole();
         DumpIdleDiagnostics();
         ConPrint(L"idle diagnosis written to: %s\n", LogPath().c_str());
         return 0;
     }
+#endif
     if (dryrun) {
         EnsureConsole();
         ConPrint(L"MemSweep dry-run (no changes)\n");

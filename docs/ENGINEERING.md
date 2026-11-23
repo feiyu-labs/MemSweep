@@ -99,8 +99,8 @@ build.cmd test     :: dev + /selftest + /idlecheck + /uipng + /checkpng
 
 | 状态 | Private | Working Set |
 |---|---|---|
-| 托盘隐藏 | **6.5MB** | 11.1MB（隐藏即释放双缓冲 + HeapCompact） |
-| 全新托盘启动 | **5.9MB** | 5.2MB |
+| 托盘隐藏（开窗后） | **6.5MB** | 11.1MB（隐藏即释放双缓冲 + HeapCompact） |
+| 全新托盘启动（v2.1.0） | **2.9MB** | **2.7MB**（2 线程 / 29 DLL，零 GDI+ / DWrite / COM） |
 | 主屏 | **8.2MB** | 12.7MB（WS 随自修剪波动） |
 | 设置/系统 Sheet | **约 9.7–9.9MB** | 约 10–15MB（含窗口双缓冲） |
 | 未禁用 IME（对照） | 71.8MB | 90MB（Chatterfly 注入） |
@@ -161,12 +161,13 @@ build.cmd test     :: dev + /selftest + /idlecheck + /uipng + /checkpng
   再 `PositionEdits()` 显示 Edit；否则浅色编辑框会先闪在首页上。
 - **托盘纪律**：图标只在整数百分比变化时重建（DIB+GDI+ 绘制开销大）；
   tooltip 变化走 `NIF_TIP` 轻量更新；`Shell_NotifyIcon` IPC 不进入每秒路径。
+- **拓扑感知异构核心分流与高硬缺页修剪熔断（v2.1.0）**：启动时通过动态解析的 `GetSystemCpuSetInformation` + `GetLogicalProcessorInformationEx(RelationCache)` 自动识别 Intel P/E 核（`EfficiencyClass`）与 AMD 非对称双 CCD（L3 容量），后台核数 ≥ 2 时在「后台效率模式」下对闲置与高 CPU 让路进程调用 `SetProcessDefaultCpuSets` 柔绑，恢复时必须 `SetProcessDefaultCpuSets(h, nullptr, 0)` 无残留交回系统；自动清理在硬缺页 `≥ 1500/s` 且非真实 OOM（可用 `≥ 512 MB`）时同步跳过工作集修剪，清理线程用 `THREAD_PRIORITY_BELOW_NORMAL` 防止换页期被饿死阻塞 10–20s。
+- **冷启零 GDI+ 托盘与零 PowerShell 系统状态（v2.1.0）**：托盘数字徽章改用纯 Win32 GDI + SDF 抗锯齿圆角渲染，`EnsureGdiplusReady()` 把 `GdiplusStartup` 与 7 套字体延迟到首次开窗/绘制；`TakeSnapshot` 的 `thread_local` 缓冲超 1.5 MB 用完即释放；`MonitorTick` 在隐藏态且无效率模式/离开维护/压力平稳时 2/3 轮次仅做微秒级指标采样，且 `CountTrimCandidates` 只在 `ShouldTriggerAuto` 通过后执行；系统状态页改用原生 `NtQuerySystemInformation(18)` + `SysMain` SCM + `Superfetch\StartedComponents`（`0x200`/`0x100`）+ `WSLService`/`LxssManager`，分页文件调整直写 `PagingFiles`（`REG_MULTI_SZ`）彻底告别读路径 PowerShell。
 - **体积与容器纪律**：`-Oz + -fvisibility=hidden + -fvisibility-inlines-hidden + gc-sections + strip` 为该工具链实测最优，
   `build.cmd` 分离 `obj/app.res` / `obj/app_dev.res` / `obj/app_arm64.res` 避免目标互踩；`SaveConfig()` 用单块
   `swprintf` 缓冲替代 25 次 `std::to_wstring` 拼接；Sheet 绘制函数加 `noinline` 控制 `DrawAll` 帧膨胀；
-  **全项目禁用 `std::unordered_map` / `std::unordered_set` / `std::deque`，避免多余 `std::sort` 实例化**：
-  监控与保护数据统一收敛为按 `pid` 排序的 `PidTrack` 单表（`qsort` + `lower_bound`）、UI 动画用 8 项定长数组、
-  UTF-8 读写与 `ForegroundPid()` 共用 `core.h` 实现（v2.0.1 实测比 v2.0.0 缩小 43 KB，x64 降至 398 KB）。
+  **全项目禁用 `std::unordered_map` / `std::unordered_set` / `std::deque` / `std::string` / `std::to_wstring`，避免多余 `std::sort` 实例化**；
+  `SelfTest` / `/uipng` / `/checkpng` / `/idlecheck` 统一 `#ifdef MS_DEV` 隔离出 Release 包（v2.1.0 实测 x64 降至 **381 KB**、ARM64 降至 **322 KB**）。
   已否决 `-falign-*`/`-fmerge-all-constants`（零收益）、unwind 表移除（CRT `.seh_` 编译失败）、
   `--icf`/`--build-id=none`/`--no-insert-timestamp`/`-stdlib=libc++`（不支持或无收益）、
   `-fno-threadsafe-statics`（省 512B，但静态初始化有并发风险）。ico 只保留
