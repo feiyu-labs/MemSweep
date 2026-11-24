@@ -58,9 +58,6 @@ extern std::atomic<bool> g_gameMode;           // 全屏/演示模式，自动�
 extern std::atomic<unsigned long long> g_reclaimableBytes; // 可回收估算（低优/全量缓存 + 空闲候选私有WS）
 
 bool  TakeSnapshot(Snapshot& s);
-bool  QueryMemoryLists(Metrics& m);
-bool  QueryCompression(Metrics& m);
-bool  QueryPools(Metrics& m);
 void  InitCore();
 void  EnablePrivileges();
 void  DisablePrivileges();
@@ -108,9 +105,7 @@ CleanPlan PlanManual(const Config& c);
 // 离开时维护：只处理空闲后台 + 低优先级缓存 + 合并页；不清全量缓存/文件缓存
 CleanPlan PlanIdle(const Config& c);
 
-// 保护判定与可回收估算
-bool IsProtectedProcess(const ProcInfo& p, const std::vector<DWORD>& protectedPids);
-size_t CountTrimCandidates(const Snapshot& s, bool requireIdle, int minWSMB, const Config& c);
+// 可回收估算（UI 首页与自检使用）
 unsigned long long ComputeReclaimable(const Snapshot& s, const Config& c, size_t* candidatesOut = nullptr);
 
 // 文件与前台通用助手（供 UI 复用）
@@ -166,7 +161,6 @@ struct CleanResult {
 void RunClean(const CleanPlan& plan, const Config& c, CleanResult& out, HANDLE cancel = nullptr,
               const Snapshot* initialSnap = nullptr);
 void LogCleanResult(const wchar_t* mode, size_t candidates, const CleanResult& r);
-bool StartCleanAsync(bool isAuto);
 void RequestManualClean(bool dryRun = false);
 
 // ---------------------------------------------------------------------------
@@ -180,7 +174,6 @@ void DumpIdleDiagnostics();
 
 // 焦点跟踪（UI 的 WinEvent 钩子调用）
 void NoteFocus(DWORD pid);
-void PruneFocusHistory(const Config& c);
 
 // 撤销 EcoQoS / 内存优先级标记（关闭开关时调用）
 void RevertBackgroundTaming();

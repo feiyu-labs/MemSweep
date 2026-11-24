@@ -608,7 +608,7 @@ bool IsElevated() {
 // ---------------------------------------------------------------------------
 // 快照
 // ---------------------------------------------------------------------------
-bool QueryMemoryLists(Metrics& m) {
+static bool QueryMemoryLists(Metrics& m) {
     SI_MEMORY_LIST ml{};
     ULONG ret = 0;
     NTSTATUS st = NtQuerySystemInformation(SIC_SystemMemoryListInformation, &ml, sizeof(ml), &ret);
@@ -663,7 +663,7 @@ bool QueryPageFileStats(PageFileStat& out) {
     return true;
 }
 
-bool QueryCompression(Metrics& m) {
+static bool QueryCompression(Metrics& m) {
     m.compressionOk = false;
     m.compressedBytes = 0;
     m.compressionRatio = 0.0;
@@ -683,7 +683,7 @@ bool QueryCompression(Metrics& m) {
         m.compressionRatio = (double)ci.TotalUniqueDataCompressed / (double)ci.TotalCompressedSize;
     return true;
 }
-bool QueryPools(Metrics& m) {
+static bool QueryPools(Metrics& m) {
     PERFORMANCE_INFORMATION pi{};
     if (!GetPerformanceInfo(&pi, sizeof(pi))) return false;
     m.nonpagedBytes = (unsigned long long)pi.KernelNonpaged * pi.PageSize;
@@ -778,7 +778,7 @@ void NoteFocus(DWORD pid) {
     LeaveCriticalSection(&g_lock);
     if (wasTamed) RestorePidIfTamed(pid);
 }
-void PruneFocusHistory(const Config& c) {
+static void PruneFocusHistory(const Config& c) {
     ULONGLONG now = GetTickCount64();
     ULONGLONG ttl = (ULONGLONG)c.focusHistorySec * 1000;
     EnterCriticalSection(&g_lock);
@@ -820,13 +820,7 @@ static bool InWhitelistLocked(const std::wstring& n) {
 }
 void RebuildWhitelist() {
     Config c = GetConfigSnapshot();
-    std::vector<std::wstring> next;
-    for (auto raw : SplitCSV(c.whitelist)) {
-        // 手输 chrome.exe 与 chrome 等价：统一口径，匹配才一致
-        std::wstring n = NormalizeProcName(raw);
-        if (!n.empty() && std::find(next.begin(), next.end(), n) == next.end())
-            next.push_back(std::move(n));
-    }
+    std::vector<std::wstring> next = ParseNormalizedCSV(c.whitelist);
     EnterCriticalSection(&g_lock);
     g_whitelistVec.swap(next);
     LeaveCriticalSection(&g_lock);
@@ -963,7 +957,7 @@ static std::vector<DWORD> BuildProtectedPids(const Snapshot& s, bool includeLive
     }
     return set;
 }
-bool IsProtectedProcess(const ProcInfo& p, const std::vector<DWORD>& protectedPids) {
+static bool IsProtectedProcess(const ProcInfo& p, const std::vector<DWORD>& protectedPids) {
     if (p.pid <= 4 || p.pid == g_selfPid) return true;
     if (p.name.empty()) return true;
     std::wstring low = NormalizeProcName(p.name);   // 快照自带 .exe 后缀，名单不带
@@ -1006,7 +1000,7 @@ static bool IsHighCompPressure(const Metrics& m) {
            m.compressedBytes > m.totalPhys / 5 && m.hardFaultsPerSec >= 1500.0;
 }
 
-size_t CountTrimCandidates(const Snapshot& s, bool requireIdle, int minWSMB, const Config& c) {
+static size_t CountTrimCandidates(const Snapshot& s, bool requireIdle, int minWSMB, const Config& c) {
     auto prot = BuildProtectedPids(s);
     const bool compHigh = IsHighCompPressure(s.m);
     size_t n = 0;
@@ -1521,7 +1515,7 @@ static DWORD WINAPI CleanThreadProc(LPVOID param) {
     return 0;
 }
 
-bool StartCleanAsync(bool isAuto) {
+static bool StartCleanAsync(bool isAuto) {
     if (InterlockedCompareExchange(&g_cleaning, 1, 0) != 0) return false;
     HANDLE h = CreateThread(nullptr, 0, CleanThreadProc,
                             (LPVOID)(uintptr_t)(isAuto ? 1 : 0), 0, nullptr);

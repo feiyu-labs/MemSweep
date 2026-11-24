@@ -2,8 +2,8 @@
 #pragma once
 
 // 单一版本源：UI 关于页、诊断导出、日志共用；资源文件 res/app.rc 仍需手动同步。
-#define MEMSWEEP_VERSION      L"2.1.0"
-#define MEMSWEEP_VERSION_FULL L"2.1.0.0"
+#define MEMSWEEP_VERSION      L"2.1.1"
+#define MEMSWEEP_VERSION_FULL L"2.1.1.0"
 
 
 #define WIN32_LEAN_AND_MEAN
@@ -88,6 +88,16 @@ inline std::wstring JoinCSV(const std::vector<std::wstring>& v) {
         s += v[i];
     }
     return s;
+}
+// 统一拆分、规范化（去 .exe、小写）并保序去重，供白名单解析与进程表共用。
+inline std::vector<std::wstring> ParseNormalizedCSV(const std::wstring& s) {
+    std::vector<std::wstring> out;
+    for (auto& raw : SplitCSV(s)) {
+        std::wstring n = NormalizeProcName(raw);
+        if (!n.empty() && std::find(out.begin(), out.end(), n) == out.end())
+            out.push_back(std::move(n));
+    }
+    return out;
 }
 inline std::wstring FormatBytes(unsigned long long b) {
     wchar_t buf[64];

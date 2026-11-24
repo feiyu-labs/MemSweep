@@ -378,8 +378,8 @@ static void BuildLayout(float w, float h, float dpi) {
     L.statusTitle = RectF(32, 68, L.w - 64, 28);
     L.statusSub = RectF(32, 98, L.w - 64, 18);
     L.gaugeCenter = RectF((L.w - 160) / 2, 126, 160, 160);
-    L.usedLine = RectF(32, 294, L.w - 64, 18);
-    L.metaLine = RectF(32, 316, L.w - 64, 18);
+    L.usedLine = RectF(32, 297, L.w - 64, 18);
+    L.metaLine = RectF(32, 318, L.w - 64, 18);
     L.btnClean = RectF(32, 348, L.w - 64, 50);
     L.autoRow = RectF(32, 412, L.w - 64, 40);
     L.lastClean = RectF(32, 458, L.w - 64, 16);
@@ -848,11 +848,11 @@ static std::wstring SysDirExe(const wchar_t* rel) {
     GetSystemDirectoryW(dir, MAX_PATH);
     return std::wstring(dir) + L"\\" + rel;
 }
-bool AutostartInstalled() {
+static bool AutostartInstalled() {
     return RunHidden(SysDirExe(L"schtasks.exe"),
                      L"/Query /TN \"" + std::wstring(kTaskName) + L"\"") == 0;
 }
-bool AutostartSet(bool on) {
+static bool AutostartSet(bool on) {
     if (on) {
         std::wstring tr = L"/Create /F /TN \"" + std::wstring(kTaskName) +
                           L"\" /TR \"\\\"" + ExePath() +
@@ -888,9 +888,7 @@ static DWORD WINAPI AutostartThread(LPVOID p) {
 static void SetAutostartAsync(bool want) {
     InterlockedIncrement(&g_autoEpoch);
     if (InterlockedCompareExchange(&g_autoBusy, 1, 0) != 0) {
-        g_toast = Tx(L"正在设置开机自启…", L"Updating startup…");
-        g_lastToastMs = GetTickCount64();
-        KickAnim();
+        ShowToast(Tx(L"正在设置开机自启…", L"Updating startup…"));
         return;
     }
     HANDLE h = CreateThread(nullptr, 0, AutostartThread, (LPVOID)(intptr_t)(want ? 1 : 0), 0, nullptr);
@@ -1021,9 +1019,7 @@ static void CommitHotkeyCapture(UINT mods, UINT vk) {
     g_cfg.hotkey = true;
     g_cfg.hotkeyCombo = next.ToString();
     SaveConfig();
-    g_toast = Tx(L"热键已更新为 ", L"Hotkey set to ") + next.ToString();
-    g_lastToastMs = GetTickCount64();
-    KickAnim();
+    ShowToast(Tx(L"热键已更新为 ", L"Hotkey set to ") + next.ToString());
 }
 
 static void CommitSettings() {
@@ -1053,15 +1049,7 @@ static void CommitSettings() {
 
     std::wstring wl = EditText(g_edWL);
     if (wl.empty() && !g_wlDraft.empty()) wl = g_wlDraft;
-    {
-        std::vector<std::wstring> canon;
-        for (auto raw : SplitCSV(wl)) {
-            std::wstring n = NormalizeProcName(raw);
-            if (!n.empty() && std::find(canon.begin(), canon.end(), n) == canon.end())
-                canon.push_back(n);
-        }
-        g_cfg.whitelist = JoinCSV(canon);
-    }
+    g_cfg.whitelist = JoinCSV(ParseNormalizedCSV(wl));
     g_cfg.autostart = s_autostart;
     bool saved = SaveConfig();
     RebuildWhitelist();
@@ -1071,9 +1059,7 @@ static void CommitSettings() {
         s_hotkey = false;
         g_cfg.hotkey = false;
         saved = SaveConfig();
-        g_toast = Tx(L"热键被其他程序占用，已关闭", L"Hotkey is taken, turned off");
-        g_lastToastMs = GetTickCount64();
-        KickAnim();
+        ShowToast(Tx(L"热键被其他程序占用，已关闭", L"Hotkey is taken, turned off"));
     }
     if (s_autostart != s_autostartInstalled) SetAutostartAsync(s_autostart);
     if (!g_cfg.ecoQoS) RevertBackgroundTaming();
@@ -1311,17 +1297,20 @@ static void DrawHomeCard(Graphics& g, const RectF& r, int id,
            f11, subColor);
 }
 
+static inline bool IntersectsClip(const RectF* clip, const RectF& r, float pad = 0.0f) {
+    if (!clip) return true;
+    return !(clip->GetRight() < r.X - pad || clip->X > r.GetRight() + pad ||
+             clip->GetBottom() < r.Y - pad || clip->Y > r.GetBottom() + pad);
+}
+
 __attribute__((noinline))
 static void DrawHome(Graphics& g, const RectF* clip = nullptr) {
     const Metrics& m = g_drawSnap.m;
     bool cleaning = g_cleaning != 0;
     bool tidying = cleaning && g_cleanPhase == 2;
     bool paused = AutoPaused();
-    const bool gaugeOnly = clip &&
-        clip->Y >= L.gaugeCenter.Y - 18.0f &&
-        clip->GetBottom() <= L.gaugeCenter.GetBottom() + 18.0f;
 
-    if (!gaugeOnly) {
+    if (IntersectsClip(clip, L.statusTitle) || IntersectsClip(clip, L.statusSub)) {
         const wchar_t* title = L"内存充足";
         const wchar_t* titleEn = L"Plenty of memory";
         const wchar_t* sub = L"无需清理";
@@ -1443,10 +1432,10 @@ static void DrawHome(Graphics& g, const RectF* clip = nullptr) {
     TextAt(g, ringLabel, RectF(L.gaugeCenter.X, L.gaugeCenter.Y + 102,
            L.gaugeCenter.Width, 18), f12, ringHover || cleaning ? T.accent : T.text3,
            StringAlignmentCenter);
-    if (gaugeOnly) return;
 
+    // 精确按脏区相交判定：任何与 clip 重叠的文本/按钮/卡片必定重绘，彻底杜绝局部重绘半截裁切。
     // 首个监控采样发布前不要画 0 KB：宁可留白一帧，也不显示假数字
-    if (m.totalPhys) {
+    if (m.totalPhys && (IntersectsClip(clip, L.usedLine) || IntersectsClip(clip, L.metaLine))) {
         wchar_t used[96];
         swprintf(used, 96, L"%s / %s", FormatBytes(m.totalPhys - m.availPhys).c_str(),
                  FormatBytes(m.totalPhys).c_str());
@@ -1461,6 +1450,7 @@ static void DrawHome(Graphics& g, const RectF* clip = nullptr) {
                      FormatBytes(m.availPhys).c_str());
         TextAt(g, meta, L.metaLine, f11, T.text3, StringAlignmentCenter);
     }
+    if (clip && clip->GetBottom() < L.btnClean.Y - 2.0f) return;
 
     {
         bool hover = g_hover == ID_BTN_CLEAN;
@@ -1594,12 +1584,7 @@ static int g_procScroll = 0;
 // 系统与 VM 内置保护显示为锁，不可切换。
 static void BuildProcessRows() {
     auto apps = AggregateApps(g_drawSnap);
-    std::vector<std::wstring> wlVec;
-    for (auto raw : SplitCSV(g_cfg.whitelist)) {
-        std::wstring n = NormalizeProcName(raw);
-        if (!n.empty() && std::find(wlVec.begin(), wlVec.end(), n) == wlVec.end())
-            wlVec.push_back(std::move(n));
-    }
+    std::vector<std::wstring> wlVec = ParseNormalizedCSV(g_cfg.whitelist);
     g_procList.clear();
     g_procList.reserve(apps.size() + wlVec.size());
     for (auto& a : apps) {
@@ -2522,9 +2507,7 @@ static DWORD WINAPI CombineThread(LPVOID) {
 }
 static void StartCombine(bool needConfirm) {
     if (g_cleaning != 0) {
-        g_toast = Tx(L"正在清理，请稍候", L"Cleaning, please wait");
-        g_lastToastMs = GetTickCount64();
-        KickAnim();
+        ShowToast(Tx(L"正在清理，请稍候", L"Cleaning, please wait"));
         return;
     }
     if (needConfirm) {
@@ -2762,6 +2745,13 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             SyncUiTimers(hwnd, 0);
         } else {
             if (g_cleanDoneAt && GetTickCount64() - g_cleanDoneAt >= 6000) g_cleanDoneAt = 0;
+            // 原生系统状态查询已零 PowerShell (<1ms)：首次展示面板时后台刷新，首页卡片立刻显示真实状态
+            {
+                AcquireSRWLockShared(&g_sysLock);
+                bool needSys = !g_sys.mmOk;
+                ReleaseSRWLockShared(&g_sysLock);
+                if (needSys) QuerySysInfoAsync();
+            }
             SyncUiTimers(hwnd, 1);
             InvalidateRect(hwnd, nullptr, FALSE);
         }
@@ -2950,11 +2940,11 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             g_lastAmbientMs = nowA;
             g_ambientPhase += dtA / 7.0f;   // 7s 一圈
             if (g_ambientPhase > 1.0f) g_ambientPhase -= 1.0f;
-            // 只失效仪表区（含高光/光晕余量），配合 WM_PAINT 部分重绘
-            RECT gr{ (LONG)((L.gaugeCenter.X - 14) * L.dpi),
-                     (LONG)((L.gaugeCenter.Y - 14) * L.dpi),
-                     (LONG)((L.gaugeCenter.GetRight() + 14) * L.dpi),
-                     (LONG)((L.gaugeCenter.GetBottom() + 14) * L.dpi) };
+            // 只失效仪表环区域（线宽 ≤10px + 抗锯齿余量 = ±8px，严禁侵占下方 usedLine）
+            RECT gr{ (LONG)((L.gaugeCenter.X - 8) * L.dpi),
+                     (LONG)((L.gaugeCenter.Y - 8) * L.dpi),
+                     (LONG)((L.gaugeCenter.GetRight() + 8) * L.dpi),
+                     (LONG)((L.gaugeCenter.GetBottom() + 8) * L.dpi) };
             InvalidateRect(hwnd, &gr, FALSE);
         }
         else if (wp == 3) {
@@ -2970,7 +2960,7 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         }
         return 0;
     case WM_APP_SYSINFO:
-        if (g_sheet == Sheet::System) InvalidateRect(hwnd, nullptr, FALSE);
+        if (g_sheet == Sheet::System || g_sheet == Sheet::None) InvalidateRect(hwnd, nullptr, FALSE);
         return 0;
     case WM_APP_AUTOSTATE: {
         // 启动核对：以计划任务的真实状态为准；与配置不一致时写回，避免下次启动又闪回。
@@ -4050,8 +4040,7 @@ int RunUI(HINSTANCE hInst, bool showOnStart) {
         if (s_hotkey) welcome += g_hkSpec.ToString() + Tx(L" 可随时清理", L" cleans anytime");
         else welcome += Tx(L"热键已关闭，可在「设置 › 高级设置」中开启",
                            L"hotkey is off; enable it in Settings › Advanced");
-        g_toast = welcome;
-        g_lastToastMs = GetTickCount64();
+        ShowToast(welcome);
         if (firstRun) SaveConfig();
     }
 
