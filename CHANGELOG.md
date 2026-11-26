@@ -1,5 +1,13 @@
 # Changelog
 
+## v2.1.2 — 2026-11-26
+
+### 高提交负载稳定性、多进程家族保护与内置输入法保护
+- **前台/可见/有声多进程应用的同名子进程与兄弟进程保护**：`BuildProtectedPids` 在 8 层父链基础上补充 2 层同名子进程保护，并对非通用宿主（跳过 `explorer`/`svchost`/`cmd`/`powershell`/`conhost`）补充同父同名兄弟进程保护，完整覆盖 Chrome / Edge / Electron 的 `gpu-process`/`renderer`/`utility` 与搜狗等孤儿启动器多进程，同时绝不跨名误保 IDE 拉起的 `java.exe`/`node.exe`。窗口重获焦点时 `NoteFocus` 同步恢复该应用家族已让路的后台子进程与兄弟进程。
+- **内置保护覆盖系统与常见中文输入法**：`IsBuiltinName` 新增 `textinputhost`、`chsime`、`chtime`、`inputapp`、`wetype_server`、`wetype_renderer`、`weaselserver`、`sogoucloud`、`baiduime`，高负载下无需手动白名单即可避免输入法候选窗掉帧。
+- **更早的换页风暴熔断与单次自动修剪上限**：自动修剪的硬缺页熔断门槛由 `1500/s` 下调至 `800/s`（仍保留效率模式后台让路，仅真实 OOM 可用 `< 512 MB` 才旁路），并将单次自动清理的工作集修剪进程数上限收紧为 `16` 个，消除 48 GB 高提交重负载下的突发换页脉冲。
+- **收紧自动全量待机清理与非 OOM 空闲检查**：自动全量待机缓存清理门槛统一要求硬缺页 `< 300/s`（补齐 `highLoadStarved` 此前遗漏的硬缺页护栏）、冷却拉长至 `20 分钟`、`freeStarved` 门槛收紧至 `< 32 MB`；95% 高负载但可用内存 `≥ 512 MB` 时不再放开 `requireIdle`，保持 60 秒缩短空闲检查（x64 **392,704 B / 383.5 KB**，ARM64 **332,288 B / 324.5 KB**）。
+
 ## v2.1.1 — 2026-11-24
 
 ### 界面局部重绘修复与代码收口

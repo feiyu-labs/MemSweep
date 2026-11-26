@@ -2,8 +2,8 @@
 #pragma once
 
 // 单一版本源：UI 关于页、诊断导出、日志共用；资源文件 res/app.rc 仍需手动同步。
-#define MEMSWEEP_VERSION      L"2.1.1"
-#define MEMSWEEP_VERSION_FULL L"2.1.1.0"
+#define MEMSWEEP_VERSION      L"2.1.2"
+#define MEMSWEEP_VERSION_FULL L"2.1.2.0"
 
 
 #define WIN32_LEAN_AND_MEAN

@@ -14,7 +14,7 @@
 
 <p align="center">
   <a href="https://github.com/feiyu-labs/MemSweep/releases/latest"><b>下载 Windows 版</b></a><br>
-  Windows 10 / 11 · x64 与 ARM64 · 381 KB
+  Windows 10 / 11 · x64 与 ARM64 · 384 KB
 </p>
 
 <p align="center">
@@ -22,7 +22,7 @@
   <a href="https://github.com/feiyu-labs/MemSweep/releases/latest"><img src="https://img.shields.io/github/v/release/feiyu-labs/MemSweep?color=emerald" alt="Release"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="License"></a>
   <img src="https://img.shields.io/badge/platform-Windows%2010%20%7C%2011%20(x64%2C%20ARM64)-blue" alt="Platform">
-  <img src="https://img.shields.io/badge/binary-381%20KB-success" alt="Binary size">
+  <img src="https://img.shields.io/badge/binary-384%20KB-success" alt="Binary size">
   <img src="https://img.shields.io/badge/tray-3%20MB-success" alt="Tray memory">
   <img src="https://img.shields.io/badge/network-none-green" alt="No network access">
 </p>
@@ -53,28 +53,28 @@
 
 ## 这是什么
 
-MemSweep 回收闲置后台进程占用的内存，你正在用的程序不受影响。它是一个 381 KB 的单个 exe，不装驱动，不跑后台服务，也不联网。
+MemSweep 回收闲置后台进程占用的内存，你正在用的程序不受影响。它是一个 384 KB 的单个 exe，不装驱动，不跑后台服务，也不联网。
 
 同类工具常见的做法是刷写修改页或按固定时间清遍所有进程，容易把桌面卡死。MemSweep 等到内存真的紧张时才动作，只动闲置后台应用，并把释放了多少写进日志。
 
 | | |
 |:---|:---|
 | **平台** | Windows 10 / 11，提供原生 x64 与 ARM64 版本 |
-| **体积** | 381 KB 单文件，不依赖任何运行库 |
+| **体积** | 384 KB 单文件，不依赖任何运行库 |
 | **占用** | 打开面板 9.5 MB · 托盘常驻 2.9 MB |
 | **权限** | 清理内存需要管理员权限；安装脚本会建开机任务，平时使用不弹 UAC |
 | **许可** | MIT |
 
 ## 特性
 
-- **自动清理只动闲置的后台应用。** 你正在用的窗口、屏幕上可见的分屏或双屏窗口、正在播放声音的程序、它们的父进程，以及最近两分钟碰过的程序都会跳过。后台应用连续五分钟几乎不用 CPU 才会被清理（时间可在设置里调）。系统压缩占用较高或磁盘换页繁忙时会自动暂缓，连续收益很小时也会放缓频率。
-- **把真正的内存瓶颈清理干净。** 使用中超过你设的阈值（默认 85%）或内存吃紧时自动开始。当空闲页长期见底而高优先级「已缓存」里还积压着数 GB 时，只要磁盘换页平稳，自动清理每隔十分钟会清一次全量待机缓存，不再空跑 0 MB。
+- **自动清理只动闲置的后台应用。** 你正在用的窗口、屏幕上可见的分屏或双屏窗口、正在播放声音的程序、它们的父进程链与同名子进程、系统与常见输入法进程，以及最近两分钟碰过的程序都会跳过。后台应用连续五分钟几乎不用 CPU 才会被清理（时间可在设置里调）。系统压缩占用较高或磁盘换页升高时会自动暂缓并限制单次处理进程数，连续收益很小时也会放缓频率。
+- **把真正的内存瓶颈清理干净。** 使用中超过你设的阈值（默认 85%）或内存吃紧时自动开始。当空闲页长期见底而高优先级「已缓存」里还积压着数 GB 时，只要磁盘换页平稳，自动清理每隔二十分钟才会清一次全量待机缓存，不再空跑 0 MB。
 - **后台效率模式同时管住 CPU、核心拓扑、磁盘和内存抢占。** 在高级设置里打开后，只在系统整体繁忙时降低非前台高占用后台的 CPU 与 I/O 优先级，在 Intel 大小核与 AMD 双 CCD 处理器上把后台进程柔绑到能效核或次核心域，在 Windows 11 上同步抑制闲置后台的高频时钟唤醒；等它闲下来或你切回这个窗口时，立刻把调度权交还系统。
 - **多进程应用合并显示。** 浏览器和开发工具的几十个子进程会按应用合并汇总，并在已提交明显偏高时直接标出提交量，一眼看出是谁占满了内存，左键一键保护整个应用，右键一次释放它全部后台实例的内存。
 - **会导致卡死的操作，它不做。** 不刷写修改页、不清注册表缓存、不全局清空所有工作集、不改系统定时器，也不结束进程。
 - **重复的内存页可以合并。** 内容相同的物理页会合并成一份；在「深度」清理或离开时开启，按下任意键立刻停下。
 - **秒开查看 Windows 的内存机制。** 系统状态页面直接通过系统原生接口读取内存压缩、页面合并、SysMain、页面文件、已提交、内核内存和 WSL 内存回收，不用拉起 PowerShell，还能导出诊断文件。
-- **一个 381 KB 的 exe。** 不用装运行库，开机静默常驻托盘时不加载图形库，窗口收进托盘或被其他程序盖住后会停掉界面定时器，玩游戏或演示时不打扰，支持深浅主题、中英文切换和自定义全局热键（默认 Ctrl+Shift+M）。
+- **一个 384 KB 的 exe。** 不用装运行库，开机静默常驻托盘时不加载图形库，窗口收进托盘或被其他程序盖住后会停掉界面定时器，玩游戏或演示时不打扰，支持深浅主题、中英文切换和自定义全局热键（默认 Ctrl+Shift+M）。
 
 <table align="center">
   <tr>
@@ -97,7 +97,7 @@ MemSweep 回收闲置后台进程占用的内存，你正在用的程序不受�
 
 ## 安装
 
-从 [Releases](https://github.com/feiyu-labs/MemSweep/releases/latest) 下载 `MemSweep-v2.1.1-x64.zip` 或 `MemSweep-v2.1.1-arm64.zip`，解压后右键 `install.cmd`，选择**以管理员身份运行**。
+从 [Releases](https://github.com/feiyu-labs/MemSweep/releases/latest) 下载 `MemSweep-v2.1.2-x64.zip` 或 `MemSweep-v2.1.2-arm64.zip`，解压后右键 `install.cmd`，选择**以管理员身份运行**。
 
 脚本会把 `MemSweep.exe` 复制到 `C:\Program Files\MemSweep\`，建一个高权限登录任务（开机不弹 UAC），加一个桌面快捷方式，然后启动到托盘。
 
@@ -136,7 +136,7 @@ MemSweep.exe /exit           :: 退出正在运行的实例
 
 | | MemSweep | Mem Reduct | WinMemoryCleaner | Process Lasso (SmartTrim) | ISLC |
 |:---|:---:|:---:|:---:|:---:|:---:|
-| 体积 | 381 KB | ~373 KB（安装包） | ~471 KB + .NET | 安装包 ~3.6 MB，全套 ~80 MB | ~1.5 MB |
+| 体积 | 384 KB | ~373 KB（安装包） | ~471 KB + .NET | 安装包 ~3.6 MB，全套 ~80 MB | ~1.5 MB |
 | 托盘占用 | 3–5 MB | 未公开 | 未公开 | 未公开 | ~27 MB（MakeUseOf 实测） |
 | 前台免疫 | 前台、可见窗、有声进程、父进程链、120 秒焦点历史 | 无 | 无 | 排除名单 | 无 |
 | 按真实压力触发 | 是 | 否 | 否 | 部分 | 部分 |

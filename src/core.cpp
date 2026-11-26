@@ -762,21 +762,56 @@ bool TakeSnapshot(Snapshot& s) {
 // ---------------------------------------------------------------------------
 // 焦点 / 空闲 / 修剪记忆
 // ---------------------------------------------------------------------------
-static void RestorePidIfTamed(DWORD pid);
+static bool RestoreProcessTaming(DWORD pid, unsigned long long ct, bool wasEco, bool wasCpu);
+static bool IsGenericHostName(const std::wstring& n);
+static bool IsGenericHostPid(const Snapshot& s, DWORD pid);
 
 void NoteFocus(DWORD pid) {
     if (!pid || pid == g_selfPid) return;
     ULONGLONG now = GetTickCount64();
-    bool wasTamed = false;
+    struct RestoreItem { DWORD pid; unsigned long long ct; bool eco; bool cpu; };
+    std::vector<RestoreItem> toRestore;
+
     EnterCriticalSection(&g_lock);
     g_fgPid = pid;
     g_focusHist.push_back({ pid, now });
     if (g_focusHist.size() > 96)
         g_focusHist.erase(g_focusHist.begin(), g_focusHist.begin() + (g_focusHist.size() - 96));
-    if (auto* tr = FindPid(pid))
-        wasTamed = tr->ecoMarked || tr->cpuRestrained;
+
+    auto takeIfTamed = [&](DWORD targetPid) {
+        if (auto* tr = FindPid(targetPid); tr && (tr->ecoMarked || tr->cpuRestrained)) {
+            toRestore.push_back({ targetPid, tr->createTime, tr->ecoMarked, tr->cpuRestrained });
+            tr->ecoMarked = false;
+            tr->cpuRestrained = false;
+            tr->restrainedAtMs = 0;
+            tr->hotTicks = 0;
+        }
+    };
+    takeIfTamed(pid);
+
+    // 切回多进程应用（Chrome/Electron/搜狗等）主窗口时，同步解除其同名子进程与同源兄弟进程的
+    // EcoQoS/E-Core/低 I/O 抑制，避免 GPU/渲染进程一直卡在低效档位。
+    std::wstring fgNorm;
+    DWORD fgPpid = 0;
+    for (const auto& p : g_snap.procs) {
+        if (p.pid == pid) {
+            fgNorm = NormalizeProcName(p.name);
+            fgPpid = p.ppid;
+            break;
+        }
+    }
+    if (!fgNorm.empty() && !IsGenericHostName(fgNorm)) {
+        const bool shareSiblingParent = fgPpid > 4 && !IsGenericHostPid(g_snap, fgPpid);
+        for (const auto& p : g_snap.procs) {
+            if (p.pid == pid || p.pid <= 4 || p.pid == g_selfPid) continue;
+            if (p.ppid != pid && !(shareSiblingParent && p.ppid == fgPpid)) continue;
+            if (NormalizeProcName(p.name) == fgNorm) takeIfTamed(p.pid);
+        }
+    }
     LeaveCriticalSection(&g_lock);
-    if (wasTamed) RestorePidIfTamed(pid);
+
+    for (const auto& item : toRestore)
+        RestoreProcessTaming(item.pid, item.ct, item.eco, item.cpu);
 }
 static void PruneFocusHistory(const Config& c) {
     ULONGLONG now = GetTickCount64();
@@ -800,17 +835,35 @@ static bool IsIdle(DWORD pid) {
 // ---------------------------------------------------------------------------
 // 保护判定
 // ---------------------------------------------------------------------------
-// 顺序表比 unordered_set 更省启动分配与代码；24 项的线性比较可忽略。
+// 顺序表比 unordered_set 更省启动分配与代码；33 项的线性比较可忽略。
 static bool IsBuiltinName(const std::wstring& n) {
     static const wchar_t* const kBuiltin[] = {
         L"system", L"smss", L"csrss", L"wininit", L"winlogon", L"services",
         L"lsass", L"lsm", L"svchost", L"dwm", L"explorer", L"fontdrvhost",
         L"audiodg", L"sihost", L"ctfmon", L"memcompression", L"memory compression", L"conhost",
         L"securityhealthservice", L"msmpeng", L"securityhealthsystray",
+        // 系统输入宿主与主流无窗口 TSF 输入法后端：被压到低工作集或 E-core 会导致明显打字卡顿
+        L"textinputhost", L"chsime", L"chtime", L"inputapp",
+        L"wetype_server", L"wetype_renderer", L"weaselserver", L"sogoucloud", L"baiduime",
         // VM/虚拟化内存是客户机热数据，修剪会导致 guest 大范围缺页，始终硬保护
         L"qemu-system-i386", L"qemu-system-x86_64", L"vmmemwsl"
     };
     for (const wchar_t* b : kBuiltin) if (n == b) return true;
+    return false;
+}
+// 通用宿主进程：做同源子进程/兄弟进程保护扩展时必须跳过，避免误保整个桌面或终端进程树。
+static bool IsGenericHostName(const std::wstring& n) {
+    static const wchar_t* const kHosts[] = {
+        L"explorer", L"svchost", L"services", L"wininit", L"sihost",
+        L"cmd", L"powershell", L"pwsh", L"conhost", L"windowsterminal", L"runtimebroker"
+    };
+    for (const wchar_t* h : kHosts) if (n == h) return true;
+    return false;
+}
+static bool IsGenericHostPid(const Snapshot& s, DWORD pid) {
+    for (const auto& p : s.procs) {
+        if (p.pid == pid) return IsGenericHostName(NormalizeProcName(p.name));
+    }
     return false;
 }
 static std::vector<std::wstring> g_whitelistVec;
@@ -941,7 +994,7 @@ static std::vector<DWORD> BuildProtectedPids(const Snapshot& s, bool includeLive
         CollectAudioPids(set);
     }
 
-    // 焦点/可见/有声进程父链（种子通常 <24 个，直接顺着 s.procs 查找，省掉临时索引表与排序模板）
+    // 1) 焦点/可见/有声进程父链（种子通常 <24 个，直接顺着 s.procs 查找，省掉临时索引表与排序模板）
     size_t seedCount = set.size();
     for (size_t idx = 0; idx < seedCount; idx++) {
         DWORD cur = set[idx];
@@ -953,6 +1006,44 @@ static std::vector<DWORD> BuildProtectedPids(const Snapshot& s, bool includeLive
             if (parentPid <= 4) break;
             cur = parentPid;
             addPid(cur);
+        }
+    }
+
+    // 2) 同应用多进程家族向下扩展（v2.1.2）：保护前台/可见/有声 Chromium & Electron 的
+    //    gpu-process / renderer / utility 子进程（以及搜狗等孤儿启动器共享同 ppid 的同名兄弟进程），
+    //    排除通用宿主进程，且严格限定同名，绝不误保 IDE 拉起的 java/node 编译子进程。
+    for (size_t idx = 0; idx < seedCount; idx++) {
+        const DWORD seedPid = set[idx];
+        std::wstring seedNorm;
+        DWORD seedPpid = 0;
+        for (const auto& p : s.procs) {
+            if (p.pid == seedPid) {
+                seedNorm = NormalizeProcName(p.name);
+                seedPpid = p.ppid;
+                break;
+            }
+        }
+        if (seedNorm.empty() || IsGenericHostName(seedNorm)) continue;
+        const bool shareSiblingParent = seedPpid > 4 && !IsGenericHostPid(s, seedPpid);
+        std::vector<DWORD> family;
+        family.reserve(16);
+        family.push_back(seedPid);
+        // 第 1 轮：直系同名子进程 + 非通用宿主下的同名同父兄弟进程
+        for (const auto& p : s.procs) {
+            if (p.pid <= 4 || p.pid == seedPid || p.pid == g_selfPid) continue;
+            if (p.ppid != seedPid && !(shareSiblingParent && p.ppid == seedPpid)) continue;
+            if (NormalizeProcName(p.name) == seedNorm) {
+                addPid(p.pid);
+                if (!ContainsPid(family, p.pid)) family.push_back(p.pid);
+            }
+        }
+        // 第 2 轮：覆盖 Electron 偶发的 2 层同名子进程
+        if (family.size() > 1) {
+            for (const auto& p : s.procs) {
+                if (p.pid <= 4 || p.pid == g_selfPid || ContainsPid(family, p.pid)) continue;
+                if (ContainsPid(family, p.ppid) && NormalizeProcName(p.name) == seedNorm)
+                    addPid(p.pid);
+            }
         }
     }
     return set;
@@ -1067,31 +1158,32 @@ CleanPlan PlanAuto(const Config& c, const Metrics& m, bool hasCandidates,
     const bool enoughStandby = m.standbyBytes >= (unsigned long long)c.standbyFloorMB * MB;
     const double hf = g_hfPerSec.load(std::memory_order_relaxed);
 
-    // 换页风暴熔断（v2.1）：硬缺页 ≥ 1500/s 且非真实 OOM（可用 ≥ 512MB）时，
-    // 跳过自动工作集修剪，避免撞上目标进程地址空间锁阻塞 9–21 秒且收益趋零。
-    const bool trimHfOk = hf < 1500.0 || realOom;
+    // 换页风暴熔断（v2.1.2）：硬缺页 ≥ 800/s 且非真实 OOM（可用 ≥ 512MB）时，
+    // 跳过自动工作集修剪（保留后台效率让路），避免高强度换页期集中修剪把磁盘队列顶爆。
+    const bool trimHfOk = hf < 800.0 || realOom;
     if (c.trimWS && trimHfOk && (hasCandidates || severe)) {
         p.trimWS = true;
         p.minWSMB = c.minWSAutoMB;
-        p.requireIdle = !severe;
+        // 仅真正 OOM（可用 < 512MB）绕过空闲门槛；95% 负载但仍有 ≥ 512MB 可用时，
+        // 复用高压 60s 紧缩空闲门槛，避免误剪刚活跃几秒的后台进程。
+        p.requireIdle = !realOom;
     }
     if (c.purgeLow && enoughStandby && (lowFree || severe)) {
         const bool hfOk = hf < 4000.0 || severe;
         if (hfOk) {
             // Windows 11 上大部分待机页位于 Priority 5（Priority 0 常为 0 MB）；
-            // 当空闲页 < 64 MB、P0 < 32 MB 且总待机 ≥ 2 GB 时，若高负载且无严重换页抖动，
-            // 允许每 10 分钟最多升级一次全量待机清理，避免空闲页长期枯竭与每轮 +0 MB 空跑。
-            const bool freeStarved = m.freeBytes < 64ULL * MB &&
+            // 仅在磁盘真正安静（硬缺页 < 300/s）、空闲页见底（< 32 MB）、P0 < 32 MB 且总待机 ≥ 2 GB 时，
+            // 允许每 20 分钟最多升级一次全量待机清理；95% 负载非 OOM 同样须遵守 hfCalm 与 20 分钟冷却，
+            // 避免高换页期反手踢掉热 DLL 导致可用内存倒跌与二次回读风暴。
+            const bool freeStarved = m.freeBytes < 32ULL * MB &&
                                      m.standbyP0Bytes < 32ULL * MB &&
                                      m.standbyBytes >= 2048ULL * MB &&
                                      m.loadPct >= c.threshold + 5;
             const bool fullCoolOk = !lastFullPurgeMs ||
-                                    (nowMs >= lastFullPurgeMs && nowMs - lastFullPurgeMs >= 10ULL * 60 * 1000);
-            const bool hfCalm = hf < 1500.0;
-            // 仅真实枯竭（可用 < 512MB）绕过全量冷却；95% 负载但仍有 ≥512MB 可用缓存时
-            // 遵守 10 分钟冷却，避免连续每分钟全量清缓存引发 4–9s 抖动。
+                                    (nowMs >= lastFullPurgeMs && nowMs - lastFullPurgeMs >= 20ULL * 60 * 1000);
+            const bool hfCalm = hf < 300.0;
             const bool oomStarved = realOom && starved;
-            const bool highLoadStarved = severe && starved && fullCoolOk;
+            const bool highLoadStarved = severe && starved && fullCoolOk && hfCalm;
             p.purgeFull = oomStarved || highLoadStarved || (freeStarved && fullCoolOk && hfCalm);
             // 仅当 P0 确实有 ≥32 MB 待机缓存时才调用低优清理，消除 0 候选 + P0≈0 的空跑。
             p.purgeLow = !p.purgeFull && (m.standbyP0Bytes >= 32ULL * MB);
@@ -1207,20 +1299,6 @@ static bool RestoreProcessTaming(DWORD pid, unsigned long long ct, bool wasEco, 
     return cpuRestored;
 }
 
-static void RestorePidIfTamed(DWORD pid) {
-    unsigned long long ct = 0;
-    bool wasEco = false, wasCpu = false;
-    EnterCriticalSection(&g_lock);
-    if (auto* tr = FindPid(pid)) {
-        ct = tr->createTime;
-        wasEco = tr->ecoMarked; tr->ecoMarked = false;
-        wasCpu = tr->cpuRestrained; tr->cpuRestrained = false;
-        tr->hotTicks = 0;
-    }
-    LeaveCriticalSection(&g_lock);
-    if (wasEco || wasCpu) RestoreProcessTaming(pid, ct, wasEco, wasCpu);
-}
-
 static void NoteTrim(const ProcInfo& p) {
     EnterCriticalSection(&g_lock);
     PidTrack& tr = UpsertPid(p.pid, p.createTime);
@@ -1278,6 +1356,8 @@ void RunClean(const CleanPlan& plan, const Config& c, CleanResult& r, HANDLE can
         const DWORD access = (plan.trimWS ? PROCESS_SET_QUOTA : 0) |
                              PROCESS_QUERY_LIMITED_INFORMATION | PROCESS_SET_INFORMATION;
         const ULONGLONG budget = (plan.trimWS && !plan.isAuto) ? 6000 : 2000;
+        // 自动模式单次最多修剪 Top 16 个最大闲置进程（列表已按 WS 降序），把回读冲击摊平；手动不设限
+        const int maxAutoTrim = (plan.trimWS && plan.isAuto) ? 16 : 0;
         // 修剪预算从循环进入时独立计时，不被前面的待机/文件缓存清理耗光（v2.0.5）
         const ULONGLONG trimT0 = GetTickCount64();
         for (const auto& p : before.procs) {
@@ -1308,6 +1388,7 @@ void RunClean(const CleanPlan& plan, const Config& c, CleanResult& r, HANDLE can
                 r.eco++;
             }
             CloseHandle(h);
+            if (maxAutoTrim > 0 && r.trimmed >= maxAutoTrim) break;
             if (GetTickCount64() - trimT0 > budget) {
                 if (plan.trimWS)
                     Log(L"修剪预算用尽（%llums），提前结束：已处理 %d 个", (unsigned long long)budget, r.trimmed);
@@ -2169,49 +2250,57 @@ bool SelfTest() {
     CleanPlan p4 = PlanAuto(c, m, false);
     chk(!p4.purgeLow && !p4.purgeFull, L"enough free should skip purge");
 
-    // 真实枯竭：可用<512MB 立即升级全量缓存；95% 负载但可用>=512MB 遵守 10 分钟全量冷却
+    // 真实枯竭：可用<512MB 立即升级全量缓存且绕过空闲；95% 负载但可用>=512MB 保持 requireIdle 且全量受 20m+hfCalm 约束
     m.availPhys = 200ULL * MB; m.loadPct = 80;
     m.freeBytes = 40ULL * MB; m.standbyBytes = 2ULL * GB;
     CleanPlan pe = PlanAuto(c, m, false, 1000000ULL, 1000000ULL - 60000ULL);
-    chk(pe.trimWS && !pe.requireIdle && pe.purgeFull && !pe.purgeLow, L"OOM severe auto escalates even within 10m");
+    chk(pe.trimWS && !pe.requireIdle && pe.purgeFull && !pe.purgeLow, L"OOM severe auto escalates even within 20m");
     chk(!pe.combine, L"auto never combines pages");
     CleanPlan pec = PlanAuto(c, m, true);
-    chk(pec.trimWS && !pec.requireIdle && pec.purgeFull, L"severe auto ignores idle gate");
+    chk(pec.trimWS && !pec.requireIdle && pec.purgeFull, L"OOM severe auto ignores idle gate");
     {
         Metrics mh{};
         mh.totalPhys = 24ULL * GB; mh.availPhys = 1024ULL * MB; mh.loadPct = 95;
         mh.freeBytes = 10ULL * MB; mh.standbyBytes = 1024ULL * MB; mh.standbyP0Bytes = 0;
-        CleanPlan pm1 = PlanAuto(c, mh, false, 1000000ULL, 0);
-        chk(pm1.purgeFull, L"95% load starved escalates when full cooldown ready");
-        CleanPlan pm2 = PlanAuto(c, mh, false, 1000000ULL, 1000000ULL - 60000ULL);
-        chk(!pm2.purgeFull && !pm2.purgeLow, L"95% load with 1GB avail respects 10m full purge cooldown");
+        CleanPlan pm1 = PlanAuto(c, mh, false, 2000000ULL, 0);
+        chk(pm1.purgeFull && pm1.requireIdle, L"95% load calm escalates full purge while keeping requireIdle");
+        CleanPlan pm2 = PlanAuto(c, mh, false, 2000000ULL, 2000000ULL - 600000ULL);
+        chk(!pm2.purgeFull && !pm2.purgeLow, L"95% load with 1GB avail respects 20m full purge cooldown");
+        g_hfPerSec.store(400.0);
+        CleanPlan pm3 = PlanAuto(c, mh, false, 2000000ULL, 0);
+        chk(!pm3.purgeFull, L"95% load non-OOM blocks full purge when hf>=300");
+        g_hfPerSec.store(0.0);
     }
-    // 高负载但仍有可用页：只做紧急修剪 + 低优先级缓存（P0>=32MB），不重复全量清空
+    // 高负载但仍有可用页：保持 requireIdle（走 60s 紧缩空闲）+ 低优先级缓存（P0>=32MB），不重复全量清空
     m.availPhys = 2ULL * GB; m.loadPct = 96;
     m.freeBytes = 2ULL * GB; m.standbyBytes = 2ULL * GB; m.standbyP0Bytes = 64ULL * MB;
     CleanPlan ph = PlanAuto(c, m, false);
-    chk(ph.trimWS && !ph.requireIdle && !ph.purgeFull && ph.purgeLow,
-        L"high load keeps high-priority cache");
+    chk(ph.trimWS && ph.requireIdle && !ph.purgeFull && ph.purgeLow,
+        L"96% load with 2GB avail keeps requireIdle and high-priority cache");
 
-    // 空闲页枯竭升级：P0 为 0 且总待机 ≥ 2 GB、负载 ≥ 阈值+5 且无换页抖动，每 10 分钟最多升一次全量缓存
+    // 空闲页枯竭升级：P0 为 0 且空闲<32MB、总待机 ≥ 2 GB、负载 ≥ 阈值+5 且硬缺页 < 300/s，每 20 分钟最多升一次全量缓存
     {
         Metrics ms{};
         ms.totalPhys = 24ULL * GB; ms.availPhys = 3ULL * GB; ms.loadPct = 90;
         ms.freeBytes = 10ULL * MB; ms.standbyBytes = 3ULL * GB;
         ms.standbyP0Bytes = 0;
-        CleanPlan pf = PlanAuto(c, ms, false, 1000000ULL, 0);
-        chk(pf.purgeFull && !pf.purgeLow, L"freeStarved escalates P5 standby purge");
-        CleanPlan pc = PlanAuto(c, ms, false, 1000000ULL, 1000000ULL - 120000ULL);
-        chk(!pc.purgeFull && !pc.purgeLow, L"freeStarved respects 10m cooldown and skips P0=0");
-        g_hfPerSec.store(1600.0);
-        CleanPlan phf = PlanAuto(c, ms, false, 1000000ULL, 0);
-        chk(!phf.purgeFull && !phf.purgeLow && !phf.trimWS, L"hf>=1500 blocks both full purge and auto trim");
-        // 有候选时高硬缺页同样熔断自动修剪，防止 9–21s 锁争用阻塞；但真实 OOM (<512MB) 放行
-        CleanPlan phft = PlanAuto(c, ms, true, 1000000ULL, 0);
-        chk(!phft.trimWS, L"hf>=1500 fuses auto trimWS with ample avail");
+        CleanPlan pf = PlanAuto(c, ms, false, 2000000ULL, 0);
+        chk(pf.purgeFull && !pf.purgeLow, L"freeStarved escalates P5 standby purge when hf<300");
+        CleanPlan pc = PlanAuto(c, ms, false, 2000000ULL, 2000000ULL - 15ULL * 60 * 1000);
+        chk(!pc.purgeFull && !pc.purgeLow, L"freeStarved respects 20m cooldown and skips P0=0");
+        ms.freeBytes = 40ULL * MB;
+        CleanPlan pf40 = PlanAuto(c, ms, false, 2000000ULL, 0);
+        chk(!pf40.purgeFull, L"freeStarved requires free<32MB");
+        ms.freeBytes = 10ULL * MB;
+        g_hfPerSec.store(350.0);
+        CleanPlan phf350 = PlanAuto(c, ms, true, 2000000ULL, 0);
+        chk(!phf350.purgeFull && phf350.trimWS, L"hf=350 blocks full purge but still allows auto trim");
+        g_hfPerSec.store(850.0);
+        CleanPlan phf850 = PlanAuto(c, ms, true, 2000000ULL, 0);
+        chk(!phf850.purgeFull && !phf850.purgeLow && !phf850.trimWS, L"hf>=800 fuses auto trimWS with ample avail");
         ms.availPhys = 200ULL * MB;
-        CleanPlan phfo = PlanAuto(c, ms, true, 1000000ULL, 0);
-        chk(phfo.trimWS && phfo.purgeFull, L"real OOM (<512MB) bypasses hf trim fuse");
+        CleanPlan phfo = PlanAuto(c, ms, true, 2000000ULL, 0);
+        chk(phfo.trimWS && !phfo.requireIdle && phfo.purgeFull, L"real OOM (<512MB) bypasses hf trim fuse and idle");
         g_hfPerSec.store(0.0);
     }
 
@@ -2282,14 +2371,72 @@ bool SelfTest() {
     // 结果统计只取正向增量
     chk(Grow(100, 40) == 60 && Grow(40, 100) == 0, L"Grow only positive delta");
 
-    // 保护名单与实时可见窗/音频会话收集冒烟（不崩、不误放自己）
+    // 保护名单、内置 IME 保护、多进程同名子进程/兄弟进程保护与通用宿主排除
     {
         Snapshot sn;
         auto liveProt = BuildProtectedPids(sn, true);
         chk(!ContainsPid(liveProt, g_selfPid), L"live media protection excludes self");
+
+        // 模拟多进程家族：Chrome(1000)->gpu(1001)->sub(1002)、IDE(2000)->java(2001)、
+        // 搜狗孤儿兄弟(3001/3002 共享已退出 ppid=3000)、explorer(4000)->两个独立 notepad(4001/4002)
+        Snapshot fam;
+        auto addP = [&](DWORD pid, DWORD ppid, const wchar_t* name) {
+            ProcInfo p{}; p.pid = pid; p.ppid = ppid; p.name = name;
+            fam.procs.push_back(std::move(p));
+        };
+        addP(1000, 4000, L"chrome.exe");
+        addP(1001, 1000, L"chrome.exe");
+        addP(1002, 1001, L"chrome.exe");
+        addP(2000, 4000, L"ZCode.exe");
+        addP(2001, 2000, L"java.exe");
+        addP(3001, 3000, L"SogouExplorer.exe");
+        addP(3002, 3000, L"SogouExplorer.exe");
+        addP(4000, 100,  L"explorer.exe");
+        addP(4001, 4000, L"notepad.exe");
+        addP(4002, 4000, L"notepad.exe");
+
+        DWORD savedFg = 0;
+        std::vector<std::pair<DWORD, ULONGLONG>> savedHist;
+        EnterCriticalSection(&g_lock);
+        savedFg = g_fgPid; savedHist = g_focusHist;
+        g_fgPid = 1000; g_focusHist.clear();
+        LeaveCriticalSection(&g_lock);
+        auto pChrome = BuildProtectedPids(fam, false);
+        chk(ContainsPid(pChrome, 1000) && ContainsPid(pChrome, 1001) && ContainsPid(pChrome, 1002),
+            L"Chromium same-name child and grandchild protected");
+        chk(!ContainsPid(pChrome, 2001) && !ContainsPid(pChrome, 4001),
+            L"unrelated processes not protected via explorer parent");
+
+        EnterCriticalSection(&g_lock);
+        g_fgPid = 2000; g_focusHist.clear();
+        LeaveCriticalSection(&g_lock);
+        auto pIde = BuildProtectedPids(fam, false);
+        chk(ContainsPid(pIde, 2000) && !ContainsPid(pIde, 2001),
+            L"IDE foreground does not protect different-name java child");
+
+        EnterCriticalSection(&g_lock);
+        g_fgPid = 3001; g_focusHist.clear();
+        LeaveCriticalSection(&g_lock);
+        auto pSogou = BuildProtectedPids(fam, false);
+        chk(ContainsPid(pSogou, 3001) && ContainsPid(pSogou, 3002),
+            L"same-name orphan sibling protected (SogouExplorer)");
+
+        EnterCriticalSection(&g_lock);
+        g_fgPid = 4001; g_focusHist.clear();
+        LeaveCriticalSection(&g_lock);
+        auto pNote = BuildProtectedPids(fam, false);
+        chk(ContainsPid(pNote, 4001) && !ContainsPid(pNote, 4002),
+            L"siblings under generic explorer host are not cross-protected");
+
+        EnterCriticalSection(&g_lock);
+        g_fgPid = savedFg; g_focusHist.swap(savedHist);
+        LeaveCriticalSection(&g_lock);
     }
     chk(IsProtectedName(L"dwm.exe"), L"builtin dwm protected");
     chk(IsProtectedName(L"qemu-system-i386"), L"VM qemu protected");
+    chk(IsProtectedName(L"TextInputHost.exe") && IsProtectedName(L"ChsIME.exe") &&
+        IsProtectedName(L"wetype_server.exe") && IsProtectedName(L"weaselserver.exe"),
+        L"builtin system and IME backends protected");
     chk(!IsProtectedName(L"claude"), L"dev app not hard-protected by default");
     chk(!IsProtectedName(L"notepad.exe"), L"notepad not protected");
     chk(TrimPid(0) == false && TrimPid(GetCurrentProcessId()) == false, L"TrimPid refuses self/idle");

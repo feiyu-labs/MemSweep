@@ -14,7 +14,7 @@
 
 <p align="center">
   <a href="https://github.com/feiyu-labs/MemSweep/releases/latest"><b>Download for Windows</b></a><br>
-  Windows 10 and 11 · x64 and ARM64 · 381 KB
+  Windows 10 and 11 · x64 and ARM64 · 384 KB
 </p>
 
 <p align="center">
@@ -22,7 +22,7 @@
   <a href="https://github.com/feiyu-labs/MemSweep/releases/latest"><img src="https://img.shields.io/github/v/release/feiyu-labs/MemSweep?color=emerald" alt="Release"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="License"></a>
   <img src="https://img.shields.io/badge/platform-Windows%2010%20%7C%2011%20(x64%2C%20ARM64)-blue" alt="Platform">
-  <img src="https://img.shields.io/badge/binary-381%20KB-success" alt="Binary size">
+  <img src="https://img.shields.io/badge/binary-384%20KB-success" alt="Binary size">
   <img src="https://img.shields.io/badge/tray-3%20MB-success" alt="Tray memory">
   <img src="https://img.shields.io/badge/network-none-green" alt="No network access">
 </p>
@@ -53,28 +53,28 @@
 
 ## What it is
 
-MemSweep reclaims memory held by idle background processes, so the apps you're using stay responsive. It's a single 381 KB executable with no drivers, background services, or network code.
+MemSweep reclaims memory held by idle background processes, so the apps you're using stay responsive. It's a single 384 KB executable with no drivers, background services, or network code.
 
 Instead of flushing modified pages or sweeping every process on a fixed timer, it waits until memory is tight, trims only idle background apps, and logs what it freed.
 
 | | |
 |:---|:---|
 | **Platform** | Windows 10 and 11, native x64 and ARM64 builds |
-| **Size** | 381 KB binary, no runtime dependencies |
+| **Size** | 384 KB binary, no runtime dependencies |
 | **Memory** | 9.5 MB open · 2.9 MB in the tray |
 | **Requirements** | Administrator rights for cleaning; the installer registers a logon task, so daily use never prompts |
 | **License** | MIT |
 
 ## Features
 
-- **Automatic cleaning only touches idle background apps.** Your active window, any visible window on screen, apps playing audio, their parent processes, and anything you touched in the last two minutes stay untouched. Background apps qualify after five minutes of near-zero CPU (adjustable in Settings). When memory compression or disk paging spikes, MemSweep holds back automatically so it never adds contention, and it eases off when consecutive runs free little memory.
-- **It clears real bottlenecks instead of spinning on 0 MB.** A pass starts when in-use memory passes your threshold (85% by default) or memory gets low. When free pages stay starved even though gigabytes sit in higher-priority standby cache, automatic passes can clear the full standby list once every ten minutes when paging is calm.
+- **Automatic cleaning only touches idle background apps.** Your active window, any visible window on screen, apps playing audio, their parent chain and same-name helper processes, built-in system and input-method processes, and anything you touched in the last two minutes stay untouched. Background apps qualify after five minutes of near-zero CPU (adjustable in Settings). When memory compression or disk paging rises, MemSweep holds back automatically so it never adds contention, caps each automatic pass, and eases off when consecutive runs free little memory.
+- **It clears real bottlenecks instead of spinning on 0 MB.** A pass starts when in-use memory passes your threshold (85% by default) or memory gets low. When free pages stay starved even though gigabytes sit in higher-priority standby cache, automatic passes can clear the full standby list at most once every twenty minutes when paging is calm.
 - **Efficiency mode lowers busy background CPU, disk I/O, and memory priority.** When turned on in Advanced settings, busy non-foreground processes yield CPU and I/O priority only during real CPU contention, curb background timer wakeups on Windows 11, steer onto efficiency cores or secondary CCDs on hybrid Intel and dual-CCD AMD CPUs, and return cleanly to Windows scheduling the moment they settle or you switch back to them.
 - **Processes are grouped by app.** Chrome, Electron, and IDE windows roll up into one total per app (and flag heavy commit charge inline), so you can see who's holding memory, protect the whole app in one click, or right-click to free all its background instances at once.
 - **It won't run operations that freeze Windows.** No modified-page flush, no registry-cache flush, no global working-set sweep, no timer changes, and no killing processes.
 - **Duplicate pages can be merged.** Identical physical pages become one copy; it runs manually in Deep cleanup or while you're away and stops the moment you press a key.
 - **It checks what Windows is doing instantaneously.** System status reads compression, page combining, SysMain, the page file, commit charge, kernel memory, and WSL memory reclaim directly from Windows APIs with no PowerShell delay, and exports diagnostics.
-- **It stays quiet and light.** No notifications during fullscreen games, presentations, or Focus Assist; UI timers stop when the window is in the tray or behind other apps and GDI+ loads only when you open the panel; one 381 KB file, light and dark themes, English and Chinese, and a customizable hotkey (Ctrl+Shift+M by default).
+- **It stays quiet and light.** No notifications during fullscreen games, presentations, or Focus Assist; UI timers stop when the window is in the tray or behind other apps and GDI+ loads only when you open the panel; one 384 KB file, light and dark themes, English and Chinese, and a customizable hotkey (Ctrl+Shift+M by default).
 
 <table align="center">
   <tr>
@@ -97,7 +97,7 @@ Instead of flushing modified pages or sweeping every process on a fixed timer, i
 
 ## Install
 
-Download `MemSweep-v2.1.1-x64.zip` or `MemSweep-v2.1.1-arm64.zip` from [Releases](https://github.com/feiyu-labs/MemSweep/releases/latest), extract it, then right-click `install.cmd` and choose **Run as administrator**.
+Download `MemSweep-v2.1.2-x64.zip` or `MemSweep-v2.1.2-arm64.zip` from [Releases](https://github.com/feiyu-labs/MemSweep/releases/latest), extract it, then right-click `install.cmd` and choose **Run as administrator**.
 
 The script copies `MemSweep.exe` to `C:\Program Files\MemSweep\`, registers an elevated logon task so startup never prompts, adds a desktop shortcut, and starts MemSweep in the tray.
 
@@ -136,7 +136,7 @@ In the tray or behind other apps, MemSweep stops its UI timers and averages abou
 
 | | MemSweep | Mem Reduct | WinMemoryCleaner | Process Lasso (SmartTrim) | ISLC |
 |:---|:---:|:---:|:---:|:---:|:---:|
-| Binary size | 381 KB | ~373 KB (installer) | ~471 KB + .NET | ~3.6 MB installer, ~80 MB suite | ~1.5 MB |
+| Binary size | 384 KB | ~373 KB (installer) | ~471 KB + .NET | ~3.6 MB installer, ~80 MB suite | ~1.5 MB |
 | Tray memory | 3–5 MB | Not published | Not published | Not published | ~27 MB (measured by MakeUseOf) |
 | Foreground immunity | Active, visible windows, audio, parent chain, 120 s history | No | No | Exclusion list | No |
 | Trigger checks real pressure | Yes | No | No | Partial | Partial |
